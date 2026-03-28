@@ -55,19 +55,28 @@ workflows:
           import android.location.LocationManager
           import android.os.Build
           import android.os.SystemClock
+          import android.os.Handler
+          import android.os.Looper
           import androidx.annotation.NonNull
           import io.flutter.embedding.android.FlutterActivity
           import io.flutter.embedding.engine.FlutterEngine
           import io.flutter.plugin.common.MethodChannel
-          import java.util.Timer
-          import java.util.TimerTask
 
           class MainActivity: FlutterActivity() {
               
               private val CHANNEL = "mock_location_channel"
               private var locationManager: LocationManager? = null
-              private var mockTimer: Timer? = null
-              private val providers = arrayOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+              
+              // Variables para el latido aleatorio (Jitter)
+              private var mockHandler: Handler? = null
+              private var mockRunnable: Runnable? = null
+              
+              // Los 3 sensores críticos
+              private val providers = arrayOf(
+                  LocationManager.GPS_PROVIDER, 
+                  LocationManager.NETWORK_PROVIDER, 
+                  "fused"
+              )
 
               override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
                   super.configureFlutterEngine(flutterEngine)
@@ -84,8 +93,7 @@ workflows:
                                   if (success) {
                                       result.success(null)
                                   } else {
-                                      // AQUÍ ESTÁ LA MEJORA 3.3: Enviamos el error real a la interfaz
-                                      result.error("PERMISSION_DENIED", "Permiso de Mock Location denegado por el sistema Android", null)
+                                      result.error("PERMISSION_DENIED", "Permiso denegado por Android", null)
                                   }
                               } else {
                                   result.error("INVALID_ARGS", "Lat o Lng es nulo", null)
@@ -112,40 +120,56 @@ workflows:
                   }
               }
 
+              // SOLUCIÓN 2 Y 3: Limpiar e inyectar correctamente
+              private fun setupMockProvider(provider: String) {
+                  try {
+                      locationManager?.removeTestProvider(provider)
+                  } catch (e: Exception) {
+                      // Ignorar si no existe
+                  }
+
+                  try {
+                      locationManager?.addTestProvider(
+                          provider,
+                          false, false, false, false,
+                          true, true, true,
+                          0, 5
+                      )
+                      locationManager?.setTestProviderEnabled(provider, true)
+                  } catch (e: Exception) {
+                      e.printStackTrace()
+                  }
+              }
+
               private fun startMockLocation(lat: Double, lng: Double): Boolean {
                   stopMockLocation() 
 
+                  // Limpiamos y preparamos todos los sensores
                   for (provider in providers) {
-                      try {
-                          locationManager?.addTestProvider(
-                              provider, false, false, false, false, true, true, true, 0, 5
-                          )
-                          locationManager?.setTestProviderEnabled(provider, true)
-                      } catch (e: SecurityException) {
-                          e.printStackTrace()
-                          return false // Si salta la seguridad, devolvemos falso inmediatamente
-                      } catch (e: IllegalArgumentException) {
-                          // El proveedor ya existe, no pasa nada
-                      } catch (e: Exception) {
-                          e.printStackTrace()
-                          return false
-                      }
+                      setupMockProvider(provider)
                   }
 
-                  mockTimer = Timer()
-                  mockTimer?.scheduleAtFixedRate(object : TimerTask() {
+                  mockHandler = Handler(Looper.getMainLooper())
+                  mockRunnable = object : Runnable {
                       override fun run() {
                           for (provider in providers) {
                               try {
+                                  // SOLUCIÓN 4: Ubicación realista
                                   val mockLocation = Location(provider)
                                   mockLocation.latitude = lat
                                   mockLocation.longitude = lng
                                   mockLocation.altitude = 10.0
                                   mockLocation.time = System.currentTimeMillis()
-                                  mockLocation.accuracy = 1.0f
+                                  mockLocation.accuracy = 0.5f
+                                  mockLocation.speed = 0.0f
+                                  mockLocation.bearing = 0.0f
                                   
                                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
                                       mockLocation.elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
+                                  }
+                                  
+                                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                      mockLocation.isMock = true
                                   }
                                   
                                   locationManager?.setTestProviderLocation(provider, mockLocation)
@@ -153,17 +177,25 @@ workflows:
                                   e.printStackTrace()
                               }
                           }
+                          
+                          // SOLUCIÓN 5: Latido variable (Jitter) para engañar al algoritmo
+                          val interval = (800..1200).random().toLong()
+                          mockHandler?.postDelayed(this, interval)
                       }
-                  }, 0, 1000)
+                  }
+                  
+                  // Iniciar el ciclo
+                  mockHandler?.post(mockRunnable!!)
                   
                   return true
               }
 
               private fun stopMockLocation() {
-                  if (mockTimer != null) {
-                      mockTimer?.cancel()
-                      mockTimer = null
-                  }
+                  // Detenemos el ciclo aleatorio
+                  mockHandler?.removeCallbacksAndMessages(null)
+                  mockRunnable = null
+                  mockHandler = null
+                  
                   for (provider in providers) {
                       try {
                           locationManager?.removeTestProvider(provider)
