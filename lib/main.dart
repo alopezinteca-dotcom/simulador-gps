@@ -120,7 +120,7 @@ class CoordinateFormatter {
 
   static String toUTMString(double lat, double lng) {
     try {
-      final UTM utmCoord = UTM.fromLatLon(lat: lat, lon: lng);
+      final utmCoord = UTM.fromLatLon(lat: lat, lon: lng);
       return "Zona \${utmCoord.zone}\${utmCoord.letter}, E: \${utmCoord.easting.toStringAsFixed(2)}, N: \${utmCoord.northing.toStringAsFixed(2)}";
     } catch (e) {
       return "Error en conversión UTM";
@@ -371,7 +371,7 @@ class _MapScreenState extends State<MapScreen> {
                     width: 50.0,
                     height: 50.0,
                     child: const Icon(
-                      Icons.location_crosshairs,
+                      Icons.my_location,
                       color: Colors.red,
                       size: 50.0,
                     ),
