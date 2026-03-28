@@ -183,8 +183,9 @@ workflows:
               }
           }
           EOF
-      - name: Compilar APK final
+          
+      - name: Compilar APK en modo Debug
         script: |
-          flutter build apk --release
+          flutter build apk --debug
     artifacts:
-      - build/app/outputs/flutter-apk/app-release.apk
+      - build/app/outputs/flutter-apk/app-debug.apk
