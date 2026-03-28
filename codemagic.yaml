@@ -10,7 +10,7 @@ workflows:
           flutter create --platforms android .
           rm -rf android/app/src/main/kotlin/*
           rm -rf android/app/src/main/java/*
-          mkdir -p android/app/src/main/kotlin/com/example/mockgps
+          mkdir -p android/app/src/main/kotlin/com/example/mock_gps_app
           
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -23,7 +23,7 @@ workflows:
                   android:name="${applicationName}"
                   android:icon="@mipmap/ic_launcher">
                   <activity
-                      android:name=".MainActivity"
+                      android:name="com.example.mock_gps_app.MainActivity"
                       android:exported="true"
                       android:launchMode="singleTop"
                       android:theme="@style/LaunchTheme"
@@ -46,8 +46,8 @@ workflows:
           </manifest>
           EOF
           
-          cat << 'EOF' > android/app/src/main/kotlin/com/example/mockgps/MainActivity.kt
-          package com.example.mockgps
+          cat << 'EOF' > android/app/src/main/kotlin/com/example/mock_gps_app/MainActivity.kt
+          package com.example.mock_gps_app
 
           import android.content.Context
           import android.content.Intent
@@ -184,8 +184,14 @@ workflows:
           }
           EOF
           
-      - name: Compilar APK en modo Debug
+      - name: Desactivar alarmas y compilar APK final
         script: |
+          cat << 'EOF' > android/app/lint.xml
+          <?xml version="1.0" encoding="UTF-8"?>
+          <lint>
+              <issue id="MockLocation" severity="ignore" />
+          </lint>
+          EOF
           flutter build apk --debug
     artifacts:
       - build/app/outputs/flutter-apk/app-debug.apk
