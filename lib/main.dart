@@ -5,7 +5,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:http/http.dart' as http;
 import 'package:utm/utm.dart';
 import 'dart:convert';
-import 'package:permission_handler/permission_handler.dart'; // Librería de permisos
+import 'package:permission_handler/permission_handler.dart'; 
 import 'advanced_coordinate_picker.dart';
 
 void main() {
@@ -39,7 +39,6 @@ class LocationService {
       await _channel.invokeMethod('startMocking', {'lat': lat, 'lng': lng});
       return "SUCCESS";
     } on PlatformException catch (e) {
-      // AQUÍ ATRAPAMOS EL ERROR REAL DEL CEREBRO DE ANDROID
       if (e.code == "PERMISSION_DENIED") {
         return "DENIED";
       }
@@ -140,10 +139,9 @@ class _MapScreenState extends State<MapScreen> {
   @override
   void initState() {
     super.initState();
-    _checkPermissions(); // Pedir permisos al arrancar la app
+    _checkPermissions();
   }
 
-  // FUNCIÓN PARA PEDIR PERMISOS DE FORMA OFICIAL
   Future<void> _checkPermissions() async {
     var status = await Permission.location.status;
     if (!status.isGranted) {
@@ -206,7 +204,6 @@ class _MapScreenState extends State<MapScreen> {
         }
       }
     } else {
-      // Nos aseguramos de tener el permiso antes de intentar simular
       var status = await Permission.location.status;
       if (!status.isGranted) {
         status = await Permission.location.request();
