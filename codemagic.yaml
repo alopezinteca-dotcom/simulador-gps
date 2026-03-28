@@ -67,34 +67,34 @@ workflows:
               private val CHANNEL = "mock_location_channel"
               private var locationManager: LocationManager? = null
               private var mockTimer: Timer? = null
+              private val providers = arrayOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
 
               override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
-                  
                   super.configureFlutterEngine(flutterEngine)
-                  
                   locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
 
                   MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
-                      
                       when (call.method) {
-                          
                           "startMocking" -> {
                               val lat = call.argument<Double>("lat")
                               val lng = call.argument<Double>("lng")
                               
                               if (lat != null && lng != null) {
-                                  startMockLocation(lat, lng)
-                                  result.success(null)
+                                  val success = startMockLocation(lat, lng)
+                                  if (success) {
+                                      result.success(null)
+                                  } else {
+                                      // AQUÍ ESTÁ LA MEJORA 3.3: Enviamos el error real a la interfaz
+                                      result.error("PERMISSION_DENIED", "Permiso de Mock Location denegado por el sistema Android", null)
+                                  }
                               } else {
                                   result.error("INVALID_ARGS", "Lat o Lng es nulo", null)
                               }
                           }
-                          
                           "stopMocking" -> {
                               stopMockLocation()
                               result.success(null)
                           }
-                          
                           "openTimeSettings" -> {
                               try {
                                   val intent = Intent(android.provider.Settings.ACTION_DATE_SETTINGS)
@@ -105,7 +105,6 @@ workflows:
                                   result.error("INTENT_ERROR", "No se pudo abrir la configuracion", null)
                               }
                           }
-                          
                           else -> {
                               result.notImplemented()
                           }
@@ -113,73 +112,70 @@ workflows:
                   }
               }
 
-              private fun startMockLocation(lat: Double, lng: Double) {
-                  
+              private fun startMockLocation(lat: Double, lng: Double): Boolean {
                   stopMockLocation() 
 
-                  try {
-                      locationManager?.addTestProvider(
-                          LocationManager.GPS_PROVIDER,
-                          false, 
-                          false, 
-                          false, 
-                          false, 
-                          true, 
-                          true, 
-                          true, 
-                          0, 
-                          5
-                      )
-                      locationManager?.setTestProviderEnabled(LocationManager.GPS_PROVIDER, true)
-                  } catch (e: SecurityException) {
-                      e.printStackTrace()
-                      return
-                  } catch (e: IllegalArgumentException) {
-                      // El proveedor ya existe
+                  for (provider in providers) {
+                      try {
+                          locationManager?.addTestProvider(
+                              provider, false, false, false, false, true, true, true, 0, 5
+                          )
+                          locationManager?.setTestProviderEnabled(provider, true)
+                      } catch (e: SecurityException) {
+                          e.printStackTrace()
+                          return false // Si salta la seguridad, devolvemos falso inmediatamente
+                      } catch (e: IllegalArgumentException) {
+                          // El proveedor ya existe, no pasa nada
+                      } catch (e: Exception) {
+                          e.printStackTrace()
+                          return false
+                      }
                   }
 
                   mockTimer = Timer()
                   mockTimer?.scheduleAtFixedRate(object : TimerTask() {
                       override fun run() {
-                          try {
-                              val mockLocation = Location(LocationManager.GPS_PROVIDER)
-                              mockLocation.latitude = lat
-                              mockLocation.longitude = lng
-                              mockLocation.altitude = 10.0
-                              mockLocation.time = System.currentTimeMillis()
-                              mockLocation.accuracy = 1.0f
-                              
-                              if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
-                                  mockLocation.elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
+                          for (provider in providers) {
+                              try {
+                                  val mockLocation = Location(provider)
+                                  mockLocation.latitude = lat
+                                  mockLocation.longitude = lng
+                                  mockLocation.altitude = 10.0
+                                  mockLocation.time = System.currentTimeMillis()
+                                  mockLocation.accuracy = 1.0f
+                                  
+                                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
+                                      mockLocation.elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
+                                  }
+                                  
+                                  locationManager?.setTestProviderLocation(provider, mockLocation)
+                              } catch (e: Exception) {
+                                  e.printStackTrace()
                               }
-                              
-                              locationManager?.setTestProviderLocation(LocationManager.GPS_PROVIDER, mockLocation)
-                          } catch (e: Exception) {
-                              e.printStackTrace()
                           }
                       }
                   }, 0, 1000)
+                  
+                  return true
               }
 
               private fun stopMockLocation() {
-                  
                   if (mockTimer != null) {
                       mockTimer?.cancel()
                       mockTimer = null
                   }
-                  
-                  try {
-                      locationManager?.removeTestProvider(LocationManager.GPS_PROVIDER)
-                  } catch (e: Exception) {
-                      e.printStackTrace()
+                  for (provider in providers) {
+                      try {
+                          locationManager?.removeTestProvider(provider)
+                      } catch (e: Exception) {
+                          e.printStackTrace()
+                      }
                   }
               }
               
               override fun onDestroy() {
-                  
                   stopMockLocation()
                   super.onDestroy()
-                  
               }
           }
           EOF
