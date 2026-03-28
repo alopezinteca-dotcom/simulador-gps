@@ -12,7 +12,12 @@ workflows:
           rm -rf android/app/src/main/java/*
           mkdir -p android/app/src/main/kotlin/com/example/mock_gps_app
           
-          echo "dependencies { implementation 'com.google.android.gms:play-services-location:21.1.0' }" >> android/app/build.gradle
+          # LA CORRECCIÓN: Detectamos el sistema moderno o antiguo y añadimos Google Play Services correctamente
+          if [ -f android/app/build.gradle.kts ]; then
+            echo 'dependencies { implementation("com.google.android.gms:play-services-location:21.1.0") }' >> android/app/build.gradle.kts
+          else
+            echo "dependencies { implementation 'com.google.android.gms:play-services-location:21.1.0' }" >> android/app/build.gradle
+          fi
           
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -174,7 +179,6 @@ workflows:
           import com.google.android.gms.location.FusedLocationProviderClient
           import com.google.android.gms.location.LocationServices
           
-          // NUEVOS IMPORTS ESTRELLA
           import com.google.android.gms.location.LocationRequest
           import com.google.android.gms.location.LocationCallback
           import com.google.android.gms.location.Priority
@@ -187,9 +191,7 @@ workflows:
               private var mockHandler: Handler? = null
               private var mockRunnable: Runnable? = null
               
-              // LA VARIABLE CLAVE
               private var locationCallback: LocationCallback? = null
-              
               private var wakeLock: PowerManager.WakeLock? = null
               
               private val providers = arrayOf(
@@ -270,7 +272,6 @@ workflows:
                       e.printStackTrace()
                   }
                   
-                  // ACTIVACIÓN DEL OYENTE OFICIAL DE GOOGLE
                   val locationRequest = LocationRequest.Builder(
                       Priority.PRIORITY_HIGH_ACCURACY,
                       500
@@ -345,7 +346,6 @@ workflows:
                   mockRunnable = null
                   mockHandler = null
                   
-                  // LIMPIEZA DEL OYENTE
                   try {
                       locationCallback?.let {
                           fusedLocationClient.removeLocationUpdates(it)
