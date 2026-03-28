@@ -124,8 +124,8 @@ class _AdvancedCoordinatePickerState extends State<AdvancedCoordinatePicker> {
     String utmString = "Error";
     try {
       final utmCoord = UTM.fromLatLon(lat: _latDegrees, lon: _lonDegrees);
-      // AQUÍ ESTÁ EL ARREGLO: Cambiado 'letter' por 'latBand'
-      utmString = "${utmCoord.zone}${utmCoord.latBand}\n${utmCoord.easting.toStringAsFixed(0)}E ${utmCoord.northing.toStringAsFixed(0)}N";
+      // AQUÍ ESTÁ EL ARREGLO DEFINITIVO: Sin letras, solo la zona segura
+      utmString = "Zona ${utmCoord.zone}\n${utmCoord.easting.toStringAsFixed(0)}E ${utmCoord.northing.toStringAsFixed(0)}N";
     } catch (e) {
       utmString = "Fuera de rango UTM";
     }
