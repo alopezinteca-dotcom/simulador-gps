@@ -12,6 +12,9 @@ workflows:
           rm -rf android/app/src/main/java/*
           mkdir -p android/app/src/main/kotlin/com/example/mock_gps_app
           
+          # AQUÍ ESTÁ EL SECRETO: Inyectamos la librería oficial de Fused Location de Google
+          echo "dependencies { implementation 'com.google.android.gms:play-services-location:21.1.0' }" >> android/app/build.gradle
+          
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
@@ -61,24 +64,35 @@ workflows:
           import io.flutter.embedding.android.FlutterActivity
           import io.flutter.embedding.engine.FlutterEngine
           import io.flutter.plugin.common.MethodChannel
+          
+          // Importamos las herramientas VIP de Google
+          import com.google.android.gms.location.FusedLocationProviderClient
+          import com.google.android.gms.location.LocationServices
 
           class MainActivity: FlutterActivity() {
               
               private val CHANNEL = "mock_location_channel"
               private var locationManager: LocationManager? = null
               
+              // Declaramos el cliente Fused de Google
+              private lateinit var fusedLocationClient: FusedLocationProviderClient
+              
               private var mockHandler: Handler? = null
               private var mockRunnable: Runnable? = null
               
-              // ARREGLO 1: Fuera el "fused", nos quedamos con los reales de Android
+              // Mantenemos los clásicos por si acaso y añadimos el PASSIVE
               private val providers = arrayOf(
                   LocationManager.GPS_PROVIDER, 
-                  LocationManager.NETWORK_PROVIDER
+                  LocationManager.NETWORK_PROVIDER,
+                  LocationManager.PASSIVE_PROVIDER
               )
 
               override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
                   super.configureFlutterEngine(flutterEngine)
                   locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+                  
+                  // Iniciamos el cliente de Google
+                  fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
 
                   MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
                       when (call.method) {
@@ -118,12 +132,10 @@ workflows:
                   }
               }
 
-              // Lógica impecable de reseteo
               private fun setupMockProvider(provider: String) {
                   try {
                       locationManager?.removeTestProvider(provider)
                   } catch (e: Exception) {
-                      // Ignorar si no existe
                   }
 
                   try {
@@ -142,76 +154,55 @@ workflows:
               private fun startMockLocation(lat: Double, lng: Double): Boolean {
                   stopMockLocation() 
 
+                  // 1. Configuramos los sensores base
                   for (provider in providers) {
                       setupMockProvider(provider)
+                  }
+                  
+                  // 2. ACTIVAMOS EL MODO MOCK EN GOOGLE FUSED (El paso clave)
+                  try {
+                      fusedLocationClient.setMockMode(true)
+                  } catch (e: SecurityException) {
+                      e.printStackTrace()
+                      return false
                   }
 
                   mockHandler = Handler(Looper.getMainLooper())
                   mockRunnable = object : Runnable {
                       override fun run() {
+                          // Creamos una ubicación híper-realista
+                          val mockLocation = Location(LocationManager.GPS_PROVIDER)
+                          mockLocation.latitude = lat
+                          mockLocation.longitude = lng
+                          mockLocation.altitude = 10.0
+                          mockLocation.time = System.currentTimeMillis()
+                          mockLocation.accuracy = 0.5f
+                          mockLocation.speed = 0.0f
+                          mockLocation.bearing = 0.0f
+                          
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
+                              mockLocation.elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
+                          }
+
+                          // 3. Inyectamos a los sensores base
                           for (provider in providers) {
                               try {
-                                  val mockLocation = Location(provider)
-                                  mockLocation.latitude = lat
-                                  mockLocation.longitude = lng
-                                  mockLocation.altitude = 10.0
-                                  mockLocation.time = System.currentTimeMillis()
-                                  mockLocation.accuracy = 0.5f
-                                  mockLocation.speed = 0.0f
-                                  mockLocation.bearing = 0.0f
-                                  
-                                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
-                                      mockLocation.elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
-                                  }
-                                  
-                                  // ARREGLO 2: Eliminado el chivato de isMock = true
-                                  
-                                  locationManager?.setTestProviderLocation(provider, mockLocation)
+                                  val provLocation = Location(mockLocation)
+                                  provLocation.provider = provider
+                                  locationManager?.setTestProviderLocation(provider, provLocation)
                               } catch (e: Exception) {
                                   e.printStackTrace()
                               }
+                          }
+                          
+                          // 4. INYECTAMOS DIRECTAMENTE AL CEREBRO DE GOOGLE (Fused)
+                          try {
+                              fusedLocationClient.setMockLocation(mockLocation)
+                          } catch (e: Exception) {
+                              e.printStackTrace()
                           }
                           
                           // Latido variable (Jitter)
                           val interval = (800..1200).random().toLong()
                           mockHandler?.postDelayed(this, interval)
                       }
-                  }
-                  
-                  mockHandler?.post(mockRunnable!!)
-                  
-                  return true
-              }
-
-              private fun stopMockLocation() {
-                  mockHandler?.removeCallbacksAndMessages(null)
-                  mockRunnable = null
-                  mockHandler = null
-                  
-                  for (provider in providers) {
-                      try {
-                          locationManager?.removeTestProvider(provider)
-                      } catch (e: Exception) {
-                          e.printStackTrace()
-                      }
-                  }
-              }
-              
-              override fun onDestroy() {
-                  stopMockLocation()
-                  super.onDestroy()
-              }
-          }
-          EOF
-          
-      - name: Desactivar alarmas y compilar APK final
-        script: |
-          cat << 'EOF' > android/app/lint.xml
-          <?xml version="1.0" encoding="UTF-8"?>
-          <lint>
-              <issue id="MockLocation" severity="ignore" />
-          </lint>
-          EOF
-          flutter build apk --debug
-    artifacts:
-      - build/app/outputs/flutter-apk/app-debug.apk
