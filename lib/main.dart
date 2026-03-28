@@ -5,6 +5,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:http/http.dart' as http;
 import 'package:utm/utm.dart';
 import 'dart:convert';
+import 'package:permission_handler/permission_handler.dart'; // Librería de permisos
 import 'advanced_coordinate_picker.dart';
 
 void main() {
@@ -33,13 +34,19 @@ class MockLocationApp extends StatelessWidget {
 class LocationService {
   static const MethodChannel _channel = MethodChannel('mock_location_channel');
 
-  Future<bool> startMocking(double lat, double lng) async {
+  Future<String> startMocking(double lat, double lng) async {
     try {
       await _channel.invokeMethod('startMocking', {'lat': lat, 'lng': lng});
-      return true;
+      return "SUCCESS";
+    } on PlatformException catch (e) {
+      // AQUÍ ATRAPAMOS EL ERROR REAL DEL CEREBRO DE ANDROID
+      if (e.code == "PERMISSION_DENIED") {
+        return "DENIED";
+      }
+      return "ERROR";
     } catch (e) {
       debugPrint("Error al iniciar Mock Location: $e");
-      return false;
+      return "ERROR";
     }
   }
 
@@ -68,7 +75,7 @@ class GeocodingService {
       final response = await http.get(
         url, 
         headers: {
-          'User-Agent': 'MockGpsApp/1.4',
+          'User-Agent': 'MockGpsApp/1.5',
         }
       );
 
@@ -130,6 +137,20 @@ class _MapScreenState extends State<MapScreen> {
   bool _isMocking = false;
   bool _isLoadingSearch = false;
 
+  @override
+  void initState() {
+    super.initState();
+    _checkPermissions(); // Pedir permisos al arrancar la app
+  }
+
+  // FUNCIÓN PARA PEDIR PERMISOS DE FORMA OFICIAL
+  Future<void> _checkPermissions() async {
+    var status = await Permission.location.status;
+    if (!status.isGranted) {
+      await Permission.location.request();
+    }
+  }
+
   void _onMapTap(TapPosition tapPosition, LatLng position) {
     setState(() {
       _selectedPosition = position;
@@ -185,11 +206,27 @@ class _MapScreenState extends State<MapScreen> {
         }
       }
     } else {
+      // Nos aseguramos de tener el permiso antes de intentar simular
+      var status = await Permission.location.status;
+      if (!status.isGranted) {
+        status = await Permission.location.request();
+        if (!status.isGranted) {
+           ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Necesitas dar permiso de ubicación a la app.'),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+          return;
+        }
+      }
+
       final double lat7 = CoordinateFormatter.enforce7Decimals(_selectedPosition.latitude);
       final double lng7 = CoordinateFormatter.enforce7Decimals(_selectedPosition.longitude);
 
-      final bool success = await _locationService.startMocking(lat7, lng7);
-      if (success) {
+      final String result = await _locationService.startMocking(lat7, lng7);
+      
+      if (result == "SUCCESS") {
         setState(() {
           _isMocking = true;
         });
@@ -202,12 +239,24 @@ class _MapScreenState extends State<MapScreen> {
             ),
           );
         }
+      } else if (result == "DENIED") {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('⚠️ Bloqueado: Selecciona esta app en "Elegir aplicación para simular ubicación" en los Ajustes de Desarrollador.'),
+              duration: Duration(seconds: 5),
+              backgroundColor: Colors.orange,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
       } else {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Error. ¿Activaste la app en Opciones de Desarrollador?'),
+              content: Text('Error desconocido al intentar simular.'),
               duration: Duration(seconds: 4),
+              backgroundColor: Colors.red,
               behavior: SnackBarBehavior.floating,
             ),
           );
