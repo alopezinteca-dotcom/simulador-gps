@@ -67,15 +67,13 @@ workflows:
               private val CHANNEL = "mock_location_channel"
               private var locationManager: LocationManager? = null
               
-              // Variables para el latido aleatorio (Jitter)
               private var mockHandler: Handler? = null
               private var mockRunnable: Runnable? = null
               
-              // Los 3 sensores críticos
+              // ARREGLO 1: Fuera el "fused", nos quedamos con los reales de Android
               private val providers = arrayOf(
                   LocationManager.GPS_PROVIDER, 
-                  LocationManager.NETWORK_PROVIDER, 
-                  "fused"
+                  LocationManager.NETWORK_PROVIDER
               )
 
               override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
@@ -120,7 +118,7 @@ workflows:
                   }
               }
 
-              // SOLUCIÓN 2 Y 3: Limpiar e inyectar correctamente
+              // Lógica impecable de reseteo
               private fun setupMockProvider(provider: String) {
                   try {
                       locationManager?.removeTestProvider(provider)
@@ -144,7 +142,6 @@ workflows:
               private fun startMockLocation(lat: Double, lng: Double): Boolean {
                   stopMockLocation() 
 
-                  // Limpiamos y preparamos todos los sensores
                   for (provider in providers) {
                       setupMockProvider(provider)
                   }
@@ -154,7 +151,6 @@ workflows:
                       override fun run() {
                           for (provider in providers) {
                               try {
-                                  // SOLUCIÓN 4: Ubicación realista
                                   val mockLocation = Location(provider)
                                   mockLocation.latitude = lat
                                   mockLocation.longitude = lng
@@ -168,9 +164,7 @@ workflows:
                                       mockLocation.elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
                                   }
                                   
-                                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                                      mockLocation.isMock = true
-                                  }
+                                  // ARREGLO 2: Eliminado el chivato de isMock = true
                                   
                                   locationManager?.setTestProviderLocation(provider, mockLocation)
                               } catch (e: Exception) {
@@ -178,20 +172,18 @@ workflows:
                               }
                           }
                           
-                          // SOLUCIÓN 5: Latido variable (Jitter) para engañar al algoritmo
+                          // Latido variable (Jitter)
                           val interval = (800..1200).random().toLong()
                           mockHandler?.postDelayed(this, interval)
                       }
                   }
                   
-                  // Iniciar el ciclo
                   mockHandler?.post(mockRunnable!!)
                   
                   return true
               }
 
               private fun stopMockLocation() {
-                  // Detenemos el ciclo aleatorio
                   mockHandler?.removeCallbacksAndMessages(null)
                   mockRunnable = null
                   mockHandler = null
