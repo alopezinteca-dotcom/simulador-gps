@@ -5,6 +5,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:http/http.dart' as http;
 import 'package:utm/utm.dart';
 import 'dart:convert';
+import 'advanced_coordinate_picker.dart';
 
 void main() {
   runApp(const MockLocationApp());
@@ -17,9 +18,9 @@ class MockLocationApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Mock GPS App',
+      title: 'Simulador GPS Pro',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blueAccent),
         useMaterial3: true,
       ),
       home: const MapScreen(),
@@ -37,7 +38,7 @@ class LocationService {
       await _channel.invokeMethod('startMocking', {'lat': lat, 'lng': lng});
       return true;
     } catch (e) {
-      debugPrint("Error al iniciar Mock Location: \$e");
+      debugPrint("Error al iniciar Mock Location: $e");
       return false;
     }
   }
@@ -47,7 +48,7 @@ class LocationService {
       await _channel.invokeMethod('stopMocking');
       return true;
     } catch (e) {
-      debugPrint("Error al detener Mock Location: \$e");
+      debugPrint("Error al detener Mock Location: $e");
       return false;
     }
   }
@@ -61,13 +62,13 @@ class GeocodingService {
     }
     
     final Uri url = Uri.parse(
-        'https://nominatim.openstreetmap.org/search?q=\$query&format=json&limit=1');
+        'https://nominatim.openstreetmap.org/search?q=$query&format=json&limit=1');
     
     try {
       final response = await http.get(
         url, 
         headers: {
-          'User-Agent': 'MockGpsApp/1.2',
+          'User-Agent': 'MockGpsApp/1.4',
         }
       );
 
@@ -80,7 +81,7 @@ class GeocodingService {
         }
       }
     } catch (e) {
-      debugPrint("Error en la búsqueda de dirección: \$e");
+      debugPrint("Error en la búsqueda de dirección: $e");
     }
     return null;
   }
@@ -88,47 +89,12 @@ class GeocodingService {
 
 /// MÓDULO 4: Formateador y Conversor de Coordenadas
 class CoordinateFormatter {
-  
   static double enforce7Decimals(double value) {
     return double.parse(value.toStringAsFixed(7));
   }
-
-  static String toGMS(double coordinate, bool isLatitude) {
-    String direction = "";
-    if (isLatitude) {
-      if (coordinate >= 0) {
-        direction = "N";
-      } else {
-        direction = "S";
-      }
-    } else {
-      if (coordinate >= 0) {
-        direction = "E";
-      } else {
-        direction = "O";
-      }
-    }
-    
-    double absolute = coordinate.abs();
-    int degrees = absolute.truncate();
-    double minutesDecimal = (absolute - degrees) * 60;
-    int minutes = minutesDecimal.truncate();
-    double seconds = (minutesDecimal - minutes) * 60;
-
-    return "\$degrees° \$minutes' \${seconds.toStringAsFixed(2)}\" \$direction";
-  }
-
-  static String toUTMString(double lat, double lng) {
-    try {
-      final utmCoord = UTM.fromLatLon(lat: lat, lon: lng);
-      return "Zona \${utmCoord.zone}\${utmCoord.letter}, E: \${utmCoord.easting.toStringAsFixed(2)}, N: \${utmCoord.northing.toStringAsFixed(2)}";
-    } catch (e) {
-      return "Error en conversión UTM";
-    }
-  }
 }
 
-/// MÓDULO 6: Servicio de Ajustes del Sistema
+/// MÓDULO 5: Servicio de Ajustes del Sistema
 class SystemSettingsService {
   static const MethodChannel _channel = MethodChannel('mock_location_channel');
 
@@ -137,13 +103,13 @@ class SystemSettingsService {
       await _channel.invokeMethod('openTimeSettings');
       return true;
     } catch (e) {
-      debugPrint("Error al abrir ajustes de hora: \$e");
+      debugPrint("Error al abrir ajustes de hora: $e");
       return false;
     }
   }
 }
 
-/// MÓDULO 5: Pantalla Principal y Mapa
+/// MÓDULO 6: Pantalla Principal y Mapa
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
 
@@ -172,10 +138,7 @@ class _MapScreenState extends State<MapScreen> {
 
   Future<void> _performSearch() async {
     final String query = _searchController.text.trim();
-    
-    if (query.isEmpty) {
-      return;
-    }
+    if (query.isEmpty) return;
 
     setState(() {
       _isLoadingSearch = true;
@@ -197,6 +160,7 @@ class _MapScreenState extends State<MapScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('No se encontró la dirección.'),
+            behavior: SnackBarBehavior.floating,
           ),
         );
       }
@@ -205,34 +169,37 @@ class _MapScreenState extends State<MapScreen> {
 
   Future<void> _toggleMockLocation() async {
     if (_isMocking) {
-      
       final bool success = await _locationService.stopMocking();
-      
       if (success) {
         setState(() {
           _isMocking = false;
         });
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Simulación de GPS detenida.')),
+            const SnackBar(
+              content: Text('Simulación de GPS detenida.'),
+              backgroundColor: Colors.redAccent,
+              behavior: SnackBarBehavior.floating,
+            ),
           );
         }
       }
-      
     } else {
-      
       final double lat7 = CoordinateFormatter.enforce7Decimals(_selectedPosition.latitude);
       final double lng7 = CoordinateFormatter.enforce7Decimals(_selectedPosition.longitude);
 
       final bool success = await _locationService.startMocking(lat7, lng7);
-      
       if (success) {
         setState(() {
           _isMocking = true;
         });
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Simulando en: \$lat7, \$lng7')),
+            const SnackBar(
+              content: Text('Simulando ubicación con éxito.'),
+              backgroundColor: Colors.green,
+              behavior: SnackBarBehavior.floating,
+            ),
           );
         }
       } else {
@@ -241,85 +208,12 @@ class _MapScreenState extends State<MapScreen> {
             const SnackBar(
               content: Text('Error. ¿Activaste la app en Opciones de Desarrollador?'),
               duration: Duration(seconds: 4),
+              behavior: SnackBarBehavior.floating,
             ),
           );
         }
       }
     }
-  }
-
-  void _showCoordinatesMenu() {
-    
-    final double lat7 = CoordinateFormatter.enforce7Decimals(_selectedPosition.latitude);
-    final double lng7 = CoordinateFormatter.enforce7Decimals(_selectedPosition.longitude);
-    
-    final String decimalFormat = "\$lat7, \$lng7";
-    final String gmsFormat = "\${CoordinateFormatter.toGMS(lat7, true)}, \${CoordinateFormatter.toGMS(lng7, false)}";
-    final String utmFormat = CoordinateFormatter.toUTMString(lat7, lng7);
-
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20.0)),
-      ),
-      builder: (BuildContext context) {
-        return Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                'Formatos de Coordenadas',
-                style: TextStyle(fontSize: 18.0, fontWeight: FontWeight.bold),
-              ),
-              const Divider(),
-              ListTile(
-                title: const Text('Decimales (7 máx)'),
-                subtitle: Text(decimalFormat),
-                trailing: IconButton(
-                  icon: const Icon(Icons.copy),
-                  onPressed: () {
-                    Clipboard.setData(ClipboardData(text: decimalFormat));
-                    Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Copiado al portapapeles')),
-                    );
-                  },
-                ),
-              ),
-              ListTile(
-                title: const Text('GMS (Grados Min Seg)'),
-                subtitle: Text(gmsFormat),
-                trailing: IconButton(
-                  icon: const Icon(Icons.copy),
-                  onPressed: () {
-                    Clipboard.setData(ClipboardData(text: gmsFormat));
-                    Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Copiado al portapapeles')),
-                    );
-                  },
-                ),
-              ),
-              ListTile(
-                title: const Text('UTM'),
-                subtitle: Text(utmFormat),
-                trailing: IconButton(
-                  icon: const Icon(Icons.copy),
-                  onPressed: () {
-                    Clipboard.setData(ClipboardData(text: utmFormat));
-                    Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Copiado al portapapeles')),
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
   }
 
   @override
@@ -332,9 +226,10 @@ class _MapScreenState extends State<MapScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Simulador GPS Pro'),
-        backgroundColor: Colors.blueAccent,
+        title: Text(_isMocking ? 'Simulando GPS...' : 'Simulador GPS Pro'),
+        backgroundColor: _isMocking ? Colors.green[600] : Colors.blueAccent,
         foregroundColor: Colors.white,
+        elevation: 4.0,
         actions: [
           IconButton(
             icon: const Icon(Icons.access_time),
@@ -344,9 +239,24 @@ class _MapScreenState extends State<MapScreen> {
             },
           ),
           IconButton(
-            icon: const Icon(Icons.share_location),
-            tooltip: 'Ver/Copiar coordenadas',
-            onPressed: _showCoordinatesMenu,
+            icon: const Icon(Icons.edit_location_alt),
+            tooltip: 'Convertidor / Editor Avanzado',
+            onPressed: () async {
+              final LatLng? newPos = await Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => AdvancedCoordinatePicker(
+                    initialPosition: _selectedPosition,
+                  ),
+                ),
+              );
+              if (newPos != null) {
+                setState(() {
+                  _selectedPosition = newPos;
+                });
+                _mapController.move(newPos, 15.0);
+              }
+            },
           ),
         ],
       ),
@@ -368,11 +278,11 @@ class _MapScreenState extends State<MapScreen> {
                 markers: [
                   Marker(
                     point: _selectedPosition,
-                    width: 50.0,
-                    height: 50.0,
+                    width: 60.0,
+                    height: 60.0,
                     child: const Icon(
-                      Icons.my_location,
-                      color: Colors.red,
+                      Icons.location_on,
+                      color: Colors.redAccent,
                       size: 50.0,
                     ),
                   ),
@@ -380,49 +290,41 @@ class _MapScreenState extends State<MapScreen> {
               ),
             ],
           ),
-          
           Positioned(
-            top: 16.0,
+            bottom: 24.0,
             left: 16.0,
-            right: 16.0,
-            child: Card(
-              elevation: 4.0,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12.0),
+            right: 180.0,
+            child: Container(
+              padding: const EdgeInsets.all(12.0),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.9),
+                borderRadius: BorderRadius.circular(15.0),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.1),
+                    blurRadius: 8.0,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
               ),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _searchController,
-                        decoration: const InputDecoration(
-                          hintText: 'Buscar ciudad o calle...',
-                          border: InputBorder.none,
-                          icon: Icon(Icons.search),
-                        ),
-                        onSubmitted: (_) {
-                          _performSearch();
-                        },
-                      ),
-                    ),
-                    if (_isLoadingSearch)
-                      const Padding(
-                        padding: EdgeInsets.all(8.0),
-                        child: SizedBox(
-                          width: 24.0,
-                          height: 24.0,
-                          child: CircularProgressIndicator(strokeWidth: 2.0),
-                        ),
-                      )
-                    else
-                      IconButton(
-                        icon: const Icon(Icons.arrow_forward),
-                        onPressed: _performSearch,
-                      ),
-                  ],
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    'Ubicación seleccionada:',
+                    style: TextStyle(fontSize: 12.0, color: Colors.grey, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 4.0),
+                  Text(
+                    'Lat: ${CoordinateFormatter.enforce7Decimals(_selectedPosition.latitude)}',
+                    style: const TextStyle(fontSize: 14.0, fontWeight: FontWeight.w500),
+                  ),
+                  Text(
+                    'Lng: ${CoordinateFormatter.enforce7Decimals(_selectedPosition.longitude)}',
+                    style: const TextStyle(fontSize: 14.0, fontWeight: FontWeight.w500),
+                  ),
+                ],
               ),
             ),
           ),
@@ -431,9 +333,10 @@ class _MapScreenState extends State<MapScreen> {
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _toggleMockLocation,
         icon: Icon(_isMocking ? Icons.stop : Icons.play_arrow),
-        label: Text(_isMocking ? 'Detener' : 'Iniciar Mock'),
-        backgroundColor: _isMocking ? Colors.red : Colors.green,
+        label: Text(_isMocking ? 'DETENER' : 'INICIAR MOCK', style: const TextStyle(fontWeight: FontWeight.bold)),
+        backgroundColor: _isMocking ? Colors.redAccent : Colors.green[600],
         foregroundColor: Colors.white,
+        elevation: 6.0,
       ),
     );
   }
