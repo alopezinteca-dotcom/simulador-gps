@@ -17,6 +17,8 @@ dependencies:
   shared_preferences: ^2.2.3
   cupertino_icons: ^1.0.2
   geolocator: ^11.0.1
+  image_picker: ^1.1.2     # NUEVO: Para abrir la galería/cámara
+  exif: ^3.1.4             # NUEVO: Para extraer el GPS oculto de la foto
 
 dev_dependencies:
   flutter_test:
