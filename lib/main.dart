@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:flutter/services.dart'; // Necesario para el Portapapeles (Clipboard)
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'dart:math';
 import 'package:permission_handler/permission_handler.dart'; 
@@ -22,8 +23,8 @@ class MockLocationApp extends StatelessWidget {
       title: 'Simulador GPS Pro 2.0',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF1E293B), // Tono oscuro técnico (Slate)
-          primary: const Color(0xFF2563EB), // Azul eléctrico corporativo
+          seedColor: const Color(0xFF1E293B),
+          primary: const Color(0xFF2563EB),
         ),
         useMaterial3: true,
       ),
@@ -59,54 +60,69 @@ class LocationService {
   }
 }
 
-/// MÓDULO 3: Buscador Avanzado (Photon API con Lista de Resultados y foco en España)
+/// MÓDULO 3: Buscador Avanzado (Photon -> Nominatim)
 class GeocodingService {
   Future<List<Map<String, dynamic>>> searchAddress(String query) async {
     if (query.isEmpty) return [];
     
-    // Mejora PRO: lang=es, limit=5, y bias geográfico en Málaga (36.72, -4.42)
-    final Uri url = Uri.parse('https://photon.komoot.io/api/?q=$query&limit=5&lang=es&lat=36.72&lon=-4.42');
+    final Uri photonUrl = Uri.parse('https://photon.komoot.io/api/?q=$query&limit=5&lang=es&lat=36.72&lon=-4.42');
     
     try {
-      final response = await http.get(url);
+      final response = await http.get(photonUrl).timeout(const Duration(seconds: 4));
       if (response.statusCode == 200) {
         final Map<String, dynamic> data = json.decode(response.body);
         final List<dynamic> features = data['features'];
         
-        List<Map<String, dynamic>> results = [];
-        for (var f in features) {
-          final coords = f['geometry']['coordinates'];
-          final props = f['properties'];
-          
-          String name = props['name'] ?? '';
-          String street = props['street'] ?? '';
-          String city = props['city'] ?? '';
-          
-          String displayName = name;
-          if (street.isNotEmpty && name != street) displayName += ' - $street';
-          if (city.isNotEmpty) displayName += ', $city';
-          if (displayName.isEmpty) displayName = 'Ubicación desconocida';
+        if (features.isNotEmpty) {
+          List<Map<String, dynamic>> results = [];
+          for (var f in features) {
+            final coords = f['geometry']['coordinates'];
+            final props = f['properties'];
+            String displayName = props['name'] ?? '';
+            if (props['street'] != null && displayName != props['street']) displayName += ' - ${props['street']}';
+            if (props['city'] != null) displayName += ', ${props['city']}';
+            if (displayName.isEmpty) displayName = 'Ubicación desconocida';
 
+            results.add({
+              'name': displayName,
+              'lat': double.parse(coords[1].toString()),
+              'lng': double.parse(coords[0].toString()),
+            });
+          }
+          return results;
+        }
+      }
+    } catch (e) {
+      debugPrint("Fallo Photon, activando Fallback Nominatim: $e");
+    }
+
+    final Uri nominatimUrl = Uri.parse('https://nominatim.openstreetmap.org/search?q=$query&format=json&limit=3&countrycodes=es');
+    try {
+      final response = await http.get(nominatimUrl, headers: {'User-Agent': 'MockGpsPro/2.0'});
+      if (response.statusCode == 200) {
+        final List<dynamic> data = json.decode(response.body);
+        List<Map<String, dynamic>> results = [];
+        for (var item in data) {
           results.add({
-            'name': displayName,
-            'lat': double.parse(coords[1].toString()),
-            'lng': double.parse(coords[0].toString()),
+            'name': item['display_name'].toString().split(',').first + ' (Fallback)',
+            'lat': double.parse(item['lat'].toString()),
+            'lng': double.parse(item['lon'].toString()),
           });
         }
         return results;
       }
     } catch (e) {
-      debugPrint("Error búsqueda: $e");
+      debugPrint("Error crítico en búsqueda: $e");
     }
+    
     return [];
   }
 }
 
-/// MÓDULO 4: Matemáticas PRO (Ruido Gaussiano y Fijación de Variables)
+/// MÓDULO 4: Matemáticas PRO (Ruido Gaussiano)
 class CoordinateFormatter {
   static final Random _random = Random();
 
-  // Algoritmo de Box-Muller para generar una campana de Gauss (Nivel PRO)
   static double _nextGaussian() {
     double u = 0, v = 0;
     while (u == 0) u = _random.nextDouble(); 
@@ -115,20 +131,16 @@ class CoordinateFormatter {
   }
 
   static double generateInjectedCoordinate(double value, int decimals) {
-    if (decimals >= 7) return value; // Máxima precisión, sin ruido
-
+    if (decimals >= 7) return value;
     final double factor = pow(10, decimals).toDouble();
     final double roundedValue = (value * factor).round() / factor;
-
-    // Lógica PRO sugerida: distribución Gaussiana dividida por 3 para simular chip GPS
     final double precisionLimit = pow(10, -decimals).toDouble();
     final double noise = _nextGaussian() * (precisionLimit / 3);
-
     return roundedValue + noise;
   }
 }
 
-/// MÓDULO 5: Pantalla Principal (Control de Misión)
+/// MÓDULO 5: Pantalla Principal y Estado
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
 
@@ -136,15 +148,17 @@ class MapScreen extends StatefulWidget {
   State<MapScreen> createState() => _MapScreenState();
 }
 
-class _MapScreenState extends State<MapScreen> {
+class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   final MapController _mapController = MapController();
   final LocationService _locationService = LocationService();
   final GeocodingService _geocodingService = GeocodingService();
-  final TextEditingController _searchController = TextEditingController();
-
-  LatLng _mapCenter = const LatLng(36.7213, -4.4214);
   
-  // SOLUCIÓN AL BUG 1: Variables fijas para la inyección
+  final TextEditingController _searchController = TextEditingController();
+  final TextEditingController _favNameController = TextEditingController(); // NUEVO: Controlador nombre favoritos
+
+  late AnimationController _blinkController; 
+  
+  LatLng _mapCenter = const LatLng(36.7213, -4.4214);
   double? _injectedLat;
   double? _injectedLng;
   
@@ -152,25 +166,120 @@ class _MapScreenState extends State<MapScreen> {
   bool _isLoadingSearch = false;
   int _selectedDecimals = 7; 
   
-  // Sistema de Favoritos (Memoria de sesión)
-  final List<Map<String, dynamic>> _favorites = [];
+  List<Map<String, dynamic>> _favorites = [];
 
   @override
   void initState() {
     super.initState();
     _requestModernPermissions();
+    _loadFavorites(); 
+    _loadLastLocation(); // NUEVO: Recuperar última ubicación al abrir la app
+    
+    _blinkController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800),
+    )..repeat(reverse: true);
   }
 
-  // SOLUCIÓN AL PUNTO 5: Permisos modernos
+  @override
+  void dispose() {
+    _blinkController.dispose();
+    _searchController.dispose();
+    _favNameController.dispose();
+    super.dispose();
+  }
+
   Future<void> _requestModernPermissions() async {
-    Map<Permission, PermissionStatus> statuses = await [
-      Permission.locationWhenInUse,
-      Permission.locationAlways,
-    ].request();
-    
-    if (statuses[Permission.locationWhenInUse]?.isDenied == true) {
-      debugPrint("Permiso denegado");
+    await [Permission.locationWhenInUse, Permission.locationAlways].request();
+  }
+
+  // MÓDULO 6: Almacenamiento Local (Persistencia)
+  Future<void> _loadFavorites() async {
+    final prefs = await SharedPreferences.getInstance();
+    final String? favsJson = prefs.getString('saved_locations');
+    if (favsJson != null) {
+      final List<dynamic> decoded = json.decode(favsJson);
+      setState(() {
+        _favorites = decoded.cast<Map<String, dynamic>>();
+      });
     }
+  }
+
+  Future<void> _saveFavoritesToDisk() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('saved_locations', json.encode(_favorites));
+  }
+
+  // NUEVO: Cargar última ubicación
+  Future<void> _loadLastLocation() async {
+    final prefs = await SharedPreferences.getInstance();
+    final double? lat = prefs.getDouble('last_lat');
+    final double? lng = prefs.getDouble('last_lng');
+    if (lat != null && lng != null) {
+      setState(() {
+        _mapCenter = LatLng(lat, lng);
+      });
+      // Movemos el mapa a la última ubicación guardada una vez cargado
+      Future.delayed(const Duration(milliseconds: 500), () {
+        _mapController.move(_mapCenter, 16.0);
+      });
+    }
+  }
+
+  // NUEVO: Guardar contexto de ubicación
+  Future<void> _saveLastLocation() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('last_lat', _mapCenter.latitude);
+    await prefs.setDouble('last_lng', _mapCenter.longitude);
+  }
+
+  // NUEVO: Diálogo para nombrar la inspección antes de guardar
+  void _showSaveFavoriteDialog() {
+    _favNameController.text = ''; // Limpiar campo
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Guardar Inspección', style: TextStyle(fontWeight: FontWeight.bold)),
+          content: TextField(
+            controller: _favNameController,
+            autofocus: true,
+            decoration: const InputDecoration(
+              hintText: 'Ej: Nave Industrial X',
+              border: OutlineInputBorder(),
+              prefixIcon: Icon(Icons.edit),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('CANCELAR', style: TextStyle(color: Colors.grey)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent, foregroundColor: Colors.white),
+              onPressed: () {
+                _saveFavoriteWithName(_favNameController.text.trim());
+                Navigator.pop(context);
+              },
+              child: const Text('GUARDAR'),
+            ),
+          ],
+        );
+      }
+    );
+  }
+
+  void _saveFavoriteWithName(String name) {
+    setState(() {
+      _favorites.insert(0, { 
+        'name': name.isEmpty ? 'Inspección (${_mapCenter.latitude.toStringAsFixed(4)})' : name,
+        'lat': _mapCenter.latitude,
+        'lng': _mapCenter.longitude,
+        'timestamp': DateTime.now().toIso8601String(), 
+      });
+    });
+    _saveFavoritesToDisk();
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Inspección guardada con éxito.')));
   }
 
   void _onMapPositionChanged(MapPosition position, bool hasGesture) {
@@ -181,7 +290,6 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  // SOLUCIÓN AL PUNTO 2: Lista de resultados del buscador
   Future<void> _performSearch() async {
     final String query = _searchController.text.trim();
     if (query.isEmpty) return;
@@ -192,16 +300,13 @@ class _MapScreenState extends State<MapScreen> {
     setState(() => _isLoadingSearch = false);
 
     if (results.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No se encontró nada.')));
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No se encontró nada.')));
       return;
     }
 
     if (results.length == 1) {
       _goToLocation(LatLng(results[0]['lat'], results[0]['lng']));
     } else {
-      // Muestra una lista elegante para elegir la empresa correcta
       if (mounted) {
         showModalBottomSheet(
           context: context,
@@ -212,7 +317,7 @@ class _MapScreenState extends State<MapScreen> {
               itemCount: results.length,
               itemBuilder: (context, index) {
                 return ListTile(
-                  leading: const Icon(Icons.business, color: Colors.blue),
+                  leading: const Icon(Icons.place, color: Colors.blueAccent),
                   title: Text(results[index]['name']),
                   onTap: () {
                     Navigator.pop(context);
@@ -232,17 +337,7 @@ class _MapScreenState extends State<MapScreen> {
     setState(() {
       _mapCenter = loc;
     });
-  }
-
-  void _saveFavorite() {
-    setState(() {
-      _favorites.add({
-        'name': 'Punto ${_favorites.length + 1} (${_mapCenter.latitude.toStringAsFixed(4)})',
-        'lat': _mapCenter.latitude,
-        'lng': _mapCenter.longitude,
-      });
-    });
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ubicación guardada en sesión')));
+    _saveLastLocation(); // Guardamos contexto
   }
 
   void _showFavorites() {
@@ -252,18 +347,31 @@ class _MapScreenState extends State<MapScreen> {
         if (_favorites.isEmpty) {
           return const Padding(
             padding: EdgeInsets.all(24.0),
-            child: Text('No hay ubicaciones guardadas.', textAlign: TextAlign.center),
+            child: Text('Aún no has guardado ninguna inspección.', textAlign: TextAlign.center),
           );
         }
         return ListView.builder(
           itemCount: _favorites.length,
           itemBuilder: (context, index) {
+            final f = _favorites[index];
             return ListTile(
-              leading: const Icon(Icons.star, color: Colors.amber),
-              title: Text(_favorites[index]['name']),
+              leading: const Icon(Icons.push_pin, color: Colors.amber),
+              title: Text(f['name'], style: const TextStyle(fontWeight: FontWeight.bold)),
+              subtitle: Text('Lat: ${f['lat'].toStringAsFixed(5)} | Lng: ${f['lng'].toStringAsFixed(5)}'),
+              trailing: IconButton(
+                icon: const Icon(Icons.delete, color: Colors.redAccent),
+                onPressed: () {
+                  setState(() {
+                    _favorites.removeAt(index);
+                    _saveFavoritesToDisk();
+                  });
+                  Navigator.pop(context); 
+                  _showFavorites(); 
+                },
+              ),
               onTap: () {
                 Navigator.pop(context);
-                _goToLocation(LatLng(_favorites[index]['lat'], _favorites[index]['lng']));
+                _goToLocation(LatLng(f['lat'], f['lng']));
               },
             );
           },
@@ -289,11 +397,9 @@ class _MapScreenState extends State<MapScreen> {
         return;
       }
 
-      // 1. Calculamos y FIJAMOS la coordenada inyectada (Solución Bug Fuzzing doble)
       final double finalLat = CoordinateFormatter.generateInjectedCoordinate(_mapCenter.latitude, _selectedDecimals);
       final double finalLng = CoordinateFormatter.generateInjectedCoordinate(_mapCenter.longitude, _selectedDecimals);
 
-      // 2. Enviamos al canal nativo
       final String result = await _locationService.startMocking(finalLat, finalLng);
       
       if (result == "SUCCESS") {
@@ -302,17 +408,34 @@ class _MapScreenState extends State<MapScreen> {
           _injectedLat = finalLat;
           _injectedLng = finalLng;
         });
+        _saveLastLocation(); // Guardamos contexto al inyectar
       } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('⚠️ Error al inyectar o permiso denegado en Ajustes.')));
-        }
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('⚠️ Error al inyectar.')));
       }
     }
   }
 
-  // Traductor de Precisión Visual
+  // NUEVO: Función para copiar coordenadas
+  void _copyCoordinates() {
+    final double displayLat = _isMocking ? _injectedLat! : _mapCenter.latitude;
+    final double displayLng = _isMocking ? _injectedLng! : _mapCenter.longitude;
+    
+    // Aplicamos los decimales elegidos al texto que se copia
+    final String textToCopy = '${displayLat.toStringAsFixed(_selectedDecimals)}, ${displayLng.toStringAsFixed(_selectedDecimals)}';
+    
+    Clipboard.setData(ClipboardData(text: textToCopy));
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Coordenadas copiadas al portapapeles'),
+        backgroundColor: Colors.blueGrey,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
   double _getRadiusMeters() {
-    if (_selectedDecimals == 7) return 0.0;
+    if (_selectedDecimals >= 7) return 0.0;
     if (_selectedDecimals == 6) return 0.11;
     if (_selectedDecimals == 5) return 1.1;
     if (_selectedDecimals == 4) return 11.0;
@@ -323,10 +446,8 @@ class _MapScreenState extends State<MapScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Si estamos simulando, mostramos la coordenada fija inyectada. Si no, el centro del mapa vivo.
     final double displayLat = _isMocking ? _injectedLat! : _mapCenter.latitude;
     final double displayLng = _isMocking ? _injectedLng! : _mapCenter.longitude;
-
     final double radiusMeters = _getRadiusMeters();
     final String errorText = radiusMeters == 0.0 ? "Exacto (± 0.0m)" : "± ${radiusMeters.toStringAsFixed(1)} m";
 
@@ -338,29 +459,29 @@ class _MapScreenState extends State<MapScreen> {
         elevation: 0,
         actions: [
           IconButton(
-            icon: const Icon(Icons.star, color: Colors.amber),
-            tooltip: 'Favoritos',
+            icon: const Icon(Icons.save_as, color: Colors.amber),
+            tooltip: 'Favoritos Guardados',
             onPressed: _showFavorites,
           ),
         ],
       ),
       body: Stack(
         children: [
-          // 1. MAPA CARTODB VOYAGER (Premium visualmente)
           FlutterMap(
             mapController: _mapController,
             options: MapOptions(
               initialCenter: _mapCenter,
               initialZoom: 16.0,
               onPositionChanged: _onMapPositionChanged, 
+              interactionOptions: InteractionOptions(
+                flags: _isMocking ? InteractiveFlag.none : InteractiveFlag.all,
+              ),
             ),
             children: [
               TileLayer(
-                // Estilo profesional de mapa (CartoDB)
                 urlTemplate: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
                 userAgentPackageName: 'com.example.mockgps',
               ),
-              // SOLUCIÓN AL PUNTO 3: Círculo de Precisión Real
               if (radiusMeters > 0)
                 CircleLayer(
                   circles: [
@@ -377,17 +498,19 @@ class _MapScreenState extends State<MapScreen> {
             ],
           ),
           
-          // 2. DIANA FIJA
           Center(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.add, color: Colors.redAccent, size: 30.0),
+                Icon(
+                  _isMocking ? Icons.lock_outline : Icons.add, 
+                  color: _isMocking ? Colors.green : Colors.redAccent, 
+                  size: 30.0
+                ),
               ],
             ),
           ),
 
-          // 3. HUD DE CONTROL TÉCNICO
           Align(
             alignment: Alignment.bottomCenter,
             child: Container(
@@ -402,12 +525,12 @@ class _MapScreenState extends State<MapScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Buscador PRO
                   Row(
                     children: [
                       Expanded(
                         child: TextField(
                           controller: _searchController,
+                          enabled: !_isMocking, 
                           decoration: InputDecoration(
                             hintText: 'Buscar empresa, polígono...',
                             isDense: true,
@@ -421,34 +544,42 @@ class _MapScreenState extends State<MapScreen> {
                       ),
                       const SizedBox(width: 8),
                       IconButton(
-                        style: IconButton.styleFrom(backgroundColor: Colors.blueAccent, foregroundColor: Colors.white),
+                        style: IconButton.styleFrom(backgroundColor: _isMocking ? Colors.grey : Colors.blueAccent, foregroundColor: Colors.white),
                         icon: _isLoadingSearch ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Icon(Icons.send),
-                        onPressed: _performSearch,
+                        onPressed: _isMocking ? null : _performSearch,
                       ),
                     ],
                   ),
                   const Divider(height: 24),
                   
-                  // Coordenadas fijadas y Favoritos
+                  // COORDENADAS HUD (Ajuste visual de decimales y Botón de Copiar)
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('LAT: ${displayLat.toStringAsFixed(6)}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, fontFamily: 'monospace')),
-                          Text('LNG: ${displayLng.toStringAsFixed(6)}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, fontFamily: 'monospace')),
+                          Text('LAT: ${displayLat.toStringAsFixed(_selectedDecimals)}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, fontFamily: 'monospace')),
+                          Text('LNG: ${displayLng.toStringAsFixed(_selectedDecimals)}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, fontFamily: 'monospace')),
                         ],
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.bookmark_add, color: Colors.blueGrey),
-                        onPressed: _saveFavorite,
-                        tooltip: 'Guardar Punto',
+                      Row(
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.copy, color: Colors.blueGrey),
+                            onPressed: _copyCoordinates,
+                            tooltip: 'Copiar',
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.bookmark_add, color: Colors.blueAccent),
+                            onPressed: _showSaveFavoriteDialog, // Abre el pop-up de nombre
+                            tooltip: 'Guardar Inspección',
+                          ),
+                        ],
                       )
                     ],
                   ),
                   
-                  // SOLUCIÓN AL PUNTO 9: Calidad de Señal
                   Container(
                     margin: const EdgeInsets.symmetric(vertical: 8),
                     padding: const EdgeInsets.all(8),
@@ -456,13 +587,22 @@ class _MapScreenState extends State<MapScreen> {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Text('📡 Señal:', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                        Row(
+                          children: [
+                            if (_isMocking)
+                              FadeTransition(
+                                opacity: _blinkController,
+                                child: const Icon(Icons.circle, color: Colors.redAccent, size: 10),
+                              ),
+                            if (_isMocking) const SizedBox(width: 6),
+                            Text(_isMocking ? 'INYECCIÓN ACTIVA' : '📡 Señal:', style: TextStyle(fontSize: 12, color: _isMocking ? Colors.redAccent : Colors.grey, fontWeight: _isMocking ? FontWeight.bold : FontWeight.normal)),
+                          ],
+                        ),
                         Text('GPS + WiFi (Error: $errorText)', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.black87)),
                       ],
                     ),
                   ),
 
-                  // Slider de Precisión (Doble Info)
                   Row(
                     children: [
                       const Icon(Icons.blur_circular, size: 20, color: Colors.blueGrey),
