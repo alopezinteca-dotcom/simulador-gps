@@ -1,18 +1,18 @@
 workflows:
   android-build:
-    name: Fabricar APK
+    name: Fabricar APK V2
     environment:
       flutter: stable
     scripts:
-      - name: Generar herramientas del horno
+      - name: Generar herramientas del horno (Versión paralela)
         script: |
           rm -rf android
-          flutter create --platforms android .
+          # AQUÍ ESTÁ LA MAGIA: Le damos el DNI terminado en ".v2"
+          flutter create --org com.example.v2 --platforms android .
           rm -rf android/app/src/main/kotlin/*
           rm -rf android/app/src/main/java/*
-          mkdir -p android/app/src/main/kotlin/com/example/mock_gps_app
+          mkdir -p android/app/src/main/kotlin/com/example/v2/mock_gps_app
           
-          # LA CORRECCIÓN: Detectamos el sistema moderno o antiguo y añadimos Google Play Services correctamente
           if [ -f android/app/build.gradle.kts ]; then
             echo 'dependencies { implementation("com.google.android.gms:play-services-location:21.1.0") }' >> android/app/build.gradle.kts
           else
@@ -31,11 +31,11 @@ workflows:
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
               
               <application
-                  android:label="Mock GPS"
+                  android:label="Simulador V2"
                   android:name="${applicationName}"
                   android:icon="@mipmap/ic_launcher">
                   <activity
-                      android:name="com.example.mock_gps_app.MainActivity"
+                      android:name="com.example.v2.mock_gps_app.MainActivity"
                       android:exported="true"
                       android:launchMode="singleTop"
                       android:theme="@style/LaunchTheme"
@@ -53,7 +53,7 @@ workflows:
                   </activity>
                   
                   <service
-                      android:name="com.example.mock_gps_app.MockLocationService"
+                      android:name="com.example.v2.mock_gps_app.MockLocationService"
                       android:enabled="true"
                       android:exported="false"
                       android:foregroundServiceType="location" />
@@ -65,8 +65,8 @@ workflows:
           </manifest>
           EOF
           
-          cat << 'EOF' > android/app/src/main/kotlin/com/example/mock_gps_app/MainActivity.kt
-          package com.example.mock_gps_app
+          cat << 'EOF' > android/app/src/main/kotlin/com/example/v2/mock_gps_app/MainActivity.kt
+          package com.example.v2.mock_gps_app
 
           import android.app.AppOpsManager
           import android.content.Context
@@ -157,8 +157,8 @@ workflows:
           }
           EOF
           
-          cat << 'EOF' > android/app/src/main/kotlin/com/example/mock_gps_app/MockLocationService.kt
-          package com.example.mock_gps_app
+          cat << 'EOF' > android/app/src/main/kotlin/com/example/v2/mock_gps_app/MockLocationService.kt
+          package com.example.v2.mock_gps_app
 
           import android.app.Notification
           import android.app.NotificationChannel
@@ -233,7 +233,7 @@ workflows:
                   }
 
                   val notification: Notification = NotificationCompat.Builder(this, channelId)
-                      .setContentTitle("Simulador GPS Activo")
+                      .setContentTitle("Simulador V2 Activo")
                       .setContentText("Enviando ubicación falsa en segundo plano...")
                       .setSmallIcon(android.R.drawable.ic_menu_mylocation)
                       .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -259,7 +259,7 @@ workflows:
 
               private fun startMockingLoop(lat: Double, lng: Double) {
                   val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-                  wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MockGpsApp::WakeLock")
+                  wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MockGpsAppV2::WakeLock")
                   wakeLock?.acquire(10 * 60 * 1000L)
 
                   for (provider in providers) {
