@@ -1,18 +1,17 @@
 workflows:
   android-build:
-    name: Fabricar APK
+    name: Fabricar APK V2
     environment:
       flutter: stable
     scripts:
-      - name: Generar herramientas del horno
+      - name: Generar herramientas del horno (Versión paralela)
         script: |
           rm -rf android
-          flutter create --platforms android .
+          flutter create --org com.example.v2 --platforms android .
           rm -rf android/app/src/main/kotlin/*
           rm -rf android/app/src/main/java/*
-          mkdir -p android/app/src/main/kotlin/com/example/mock_gps_app
+          mkdir -p android/app/src/main/kotlin/com/example/v2/mock_gps_app
           
-          # LA CORRECCIÓN: Detectamos el sistema moderno o antiguo y añadimos Google Play Services correctamente
           if [ -f android/app/build.gradle.kts ]; then
             echo 'dependencies { implementation("com.google.android.gms:play-services-location:21.1.0") }' >> android/app/build.gradle.kts
           else
@@ -31,11 +30,11 @@ workflows:
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
               
               <application
-                  android:label="Mock GPS"
+                  android:label="Simulador V2"
                   android:name="${applicationName}"
                   android:icon="@mipmap/ic_launcher">
                   <activity
-                      android:name="com.example.mock_gps_app.MainActivity"
+                      android:name="com.example.v2.mock_gps_app.MainActivity"
                       android:exported="true"
                       android:launchMode="singleTop"
                       android:theme="@style/LaunchTheme"
@@ -53,7 +52,7 @@ workflows:
                   </activity>
                   
                   <service
-                      android:name="com.example.mock_gps_app.MockLocationService"
+                      android:name="com.example.v2.mock_gps_app.MockLocationService"
                       android:enabled="true"
                       android:exported="false"
                       android:foregroundServiceType="location" />
@@ -65,8 +64,8 @@ workflows:
           </manifest>
           EOF
           
-          cat << 'EOF' > android/app/src/main/kotlin/com/example/mock_gps_app/MainActivity.kt
-          package com.example.mock_gps_app
+          cat << 'EOF' > android/app/src/main/kotlin/com/example/v2/mock_gps_app/MainActivity.kt
+          package com.example.v2.mock_gps_app
 
           import android.app.AppOpsManager
           import android.content.Context
@@ -87,10 +86,14 @@ workflows:
                   MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
                       when (call.method) {
                           "startMocking" -> {
-                              val lat = call.argument<Double>("lat")
-                              val lng = call.argument<Double>("lng")
+                              // LA SOLUCIÓN DEL EXPERTO: Recibir Strings en lugar de Doubles
+                              val latStr = call.argument<String>("lat")
+                              val lngStr = call.argument<String>("lng")
                               
-                              if (lat != null && lng != null) {
+                              if (latStr != null && lngStr != null) {
+                                  val lat = latStr.toDouble()
+                                  val lng = lngStr.toDouble()
+
                                   if (!isMockAppSelected()) {
                                       result.error("PERMISSION_DENIED", "La app no esta seleccionada en Opciones de Desarrollador", null)
                                       return@setMethodCallHandler
@@ -157,8 +160,8 @@ workflows:
           }
           EOF
           
-          cat << 'EOF' > android/app/src/main/kotlin/com/example/mock_gps_app/MockLocationService.kt
-          package com.example.mock_gps_app
+          cat << 'EOF' > android/app/src/main/kotlin/com/example/v2/mock_gps_app/MockLocationService.kt
+          package com.example.v2.mock_gps_app
 
           import android.app.Notification
           import android.app.NotificationChannel
@@ -178,7 +181,6 @@ workflows:
           import androidx.core.app.NotificationCompat
           import com.google.android.gms.location.FusedLocationProviderClient
           import com.google.android.gms.location.LocationServices
-          
           import com.google.android.gms.location.LocationRequest
           import com.google.android.gms.location.LocationCallback
           import com.google.android.gms.location.Priority
@@ -187,10 +189,8 @@ workflows:
 
               private var locationManager: LocationManager? = null
               private lateinit var fusedLocationClient: FusedLocationProviderClient
-              
               private var mockHandler: Handler? = null
               private var mockRunnable: Runnable? = null
-              
               private var locationCallback: LocationCallback? = null
               private var wakeLock: PowerManager.WakeLock? = null
               
@@ -209,10 +209,8 @@ workflows:
               override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
                   val lat = intent?.getDoubleExtra("lat", 0.0) ?: 0.0
                   val lng = intent?.getDoubleExtra("lng", 0.0) ?: 0.0
-
                   startForegroundServiceNotification()
                   startMockingLoop(lat, lng)
-
                   return START_STICKY
               }
 
@@ -223,78 +221,47 @@ workflows:
               private fun startForegroundServiceNotification() {
                   val channelId = "mock_location_channel_id"
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                      val channel = NotificationChannel(
-                          channelId,
-                          "Servicio de Ubicación Simulada",
-                          NotificationManager.IMPORTANCE_LOW
-                      )
+                      val channel = NotificationChannel(channelId, "Servicio de Ubicación Simulada", NotificationManager.IMPORTANCE_LOW)
                       val manager = getSystemService(NotificationManager::class.java)
                       manager?.createNotificationChannel(channel)
                   }
-
                   val notification: Notification = NotificationCompat.Builder(this, channelId)
-                      .setContentTitle("Simulador GPS Activo")
-                      .setContentText("Enviando ubicación falsa en segundo plano...")
+                      .setContentTitle("Simulador V2 Activo")
+                      .setContentText("Enviando ubicación ultra precisa en segundo plano...")
                       .setSmallIcon(android.R.drawable.ic_menu_mylocation)
                       .setPriority(NotificationCompat.PRIORITY_LOW)
                       .build()
-
                   startForeground(1, notification)
               }
 
               private fun setupMockProvider(provider: String) {
+                  try { locationManager?.removeTestProvider(provider) } catch (e: Exception) {}
                   try {
-                      locationManager?.removeTestProvider(provider)
-                  } catch (e: Exception) {}
-
-                  try {
-                      locationManager?.addTestProvider(
-                          provider, false, false, false, false, true, true, true, 0, 5
-                      )
+                      locationManager?.addTestProvider(provider, false, false, false, false, true, true, true, 0, 5)
                       locationManager?.setTestProviderEnabled(provider, true)
-                  } catch (e: Exception) {
-                      e.printStackTrace()
-                  }
+                  } catch (e: Exception) { e.printStackTrace() }
               }
 
               private fun startMockingLoop(lat: Double, lng: Double) {
                   val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-                  wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MockGpsApp::WakeLock")
+                  wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MockGpsAppV2::WakeLock")
                   wakeLock?.acquire(10 * 60 * 1000L)
 
-                  for (provider in providers) {
-                      setupMockProvider(provider)
-                  }
+                  for (provider in providers) { setupMockProvider(provider) }
                   
-                  try {
-                      fusedLocationClient.setMockMode(true)
-                  } catch (e: Exception) {
-                      e.printStackTrace()
-                  }
+                  try { fusedLocationClient.setMockMode(true) } catch (e: Exception) {}
                   
-                  val locationRequest = LocationRequest.Builder(
-                      Priority.PRIORITY_HIGH_ACCURACY,
-                      500
-                  ).build()
-
+                  val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 500).build()
                   locationCallback = object : LocationCallback() {}
 
                   try {
-                      fusedLocationClient.requestLocationUpdates(
-                          locationRequest,
-                          locationCallback!!,
-                          Looper.getMainLooper()
-                      )
-                  } catch (e: SecurityException) {
-                      e.printStackTrace()
-                  }
+                      fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback!!, Looper.getMainLooper())
+                  } catch (e: SecurityException) { e.printStackTrace() }
 
                   mockHandler = Handler(Looper.getMainLooper())
                   mockRunnable = object : Runnable {
                       override fun run() {
-                          try {
-                              fusedLocationClient.setMockMode(true)
-                          } catch (e: Exception) {}
+                          try { fusedLocationClient.setMockMode(true) } catch (e: Exception) {}
 
                           val mockLocation = Location(LocationManager.GPS_PROVIDER)
                           mockLocation.latitude = lat
@@ -306,33 +273,25 @@ workflows:
                           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
                               mockLocation.elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
                           }
-                          
                           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                               mockLocation.verticalAccuracyMeters = 3.0f
                               mockLocation.speedAccuracyMetersPerSecond = 0.1f
                               mockLocation.bearingAccuracyDegrees = 1.0f
                           }
-
-                          mockLocation.extras = Bundle().apply {
-                              putBoolean("mockLocation", true)
-                          }
+                          mockLocation.extras = Bundle().apply { putBoolean("mockLocation", true) }
 
                           for (provider in providers) {
                               try {
                                   val provLocation = Location(mockLocation)
                                   provLocation.provider = provider
                                   locationManager?.setTestProviderLocation(provider, provLocation)
-                              } catch (e: Exception) {
-                                  e.printStackTrace()
-                              }
+                              } catch (e: Exception) {}
                           }
                           
                           try {
                               fusedLocationClient.setMockLocation(mockLocation)
                               fusedLocationClient.flushLocations()
-                          } catch (e: Exception) {
-                              e.printStackTrace()
-                          }
+                          } catch (e: Exception) {}
                           
                           val interval = (300..700).random().toLong()
                           mockHandler?.postDelayed(this, interval)
@@ -345,29 +304,12 @@ workflows:
                   mockHandler?.removeCallbacksAndMessages(null)
                   mockRunnable = null
                   mockHandler = null
-                  
-                  try {
-                      locationCallback?.let {
-                          fusedLocationClient.removeLocationUpdates(it)
-                      }
-                  } catch (e: Exception) {
-                      e.printStackTrace()
-                  }
-                  
-                  if (wakeLock?.isHeld == true) {
-                      wakeLock?.release()
-                  }
-                  
+                  try { locationCallback?.let { fusedLocationClient.removeLocationUpdates(it) } } catch (e: Exception) {}
+                  if (wakeLock?.isHeld == true) { wakeLock?.release() }
                   for (provider in providers) {
-                      try {
-                          locationManager?.removeTestProvider(provider)
-                      } catch (e: Exception) {}
+                      try { locationManager?.removeTestProvider(provider) } catch (e: Exception) {}
                   }
-                  
-                  try {
-                      fusedLocationClient.setMockMode(false)
-                  } catch (e: Exception) {}
-                  
+                  try { fusedLocationClient.setMockMode(false) } catch (e: Exception) {}
                   super.onDestroy()
               }
           }
