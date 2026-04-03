@@ -269,10 +269,10 @@ workflows:
                               mockLocation.bearingAccuracyDegrees = 1.0f
                           }
                           
-                          // SIMPLIFICACIÓN: Un solo check oficial para marcar como MOCK el objeto base
+                          // CORRECCIÓN DEL COMPILADOR: Llamada explícita a la función setter
                           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
                               @Suppress("DEPRECATION")
-                              mockLocation.isFromMockProvider = true
+                              mockLocation.setIsFromMockProvider(true)
                           }
 
                           mockLocation.extras = Bundle().apply { 
@@ -284,20 +284,18 @@ workflows:
                                   val loc = Location(mockLocation)
                                   loc.provider = p
                                   
-                                  // AJUSTE: Re-estampar el tiempo exacto en cada clon
                                   loc.time = System.currentTimeMillis()
                                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
                                       loc.elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
                                   }
 
-                                  // AJUSTE: Reforzar velocidad y rumbo nulo en cada clon
                                   loc.speed = 0.0f
                                   loc.bearing = 0.0f
 
-                                  // AJUSTE: Reforzar flag MOCK en cada clon individual
+                                  // CORRECCIÓN DEL COMPILADOR: Llamada explícita al setter en los clones
                                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
                                       @Suppress("DEPRECATION")
-                                      loc.isFromMockProvider = true
+                                      loc.setIsFromMockProvider(true)
                                   }
                                   
                                   locationManager?.setTestProviderLocation(p, loc)
