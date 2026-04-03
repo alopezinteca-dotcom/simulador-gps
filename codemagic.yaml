@@ -24,6 +24,7 @@ workflows:
               
               <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
               <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+              <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
               <uses-permission android:name="android.permission.ACCESS_MOCK_LOCATION" />
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.WAKE_LOCK" />
@@ -31,14 +32,10 @@ workflows:
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
               <uses-permission android:name="android.permission.CAMERA" />
-              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
-              
               <application
                   android:label="INSPECTOR PRO 3"
                   android:name="${applicationName}"
-                  android:icon="@mipmap/ic_launcher"
-                  android:requestLegacyExternalStorage="true">
+                  android:icon="@mipmap/ic_launcher">
                   
                   <activity
                       android:name=".MainActivity"
@@ -104,7 +101,6 @@ workflows:
                   handleIntent(intent)
               }
 
-              // ATRAPAMOS EL ENLACE COMPARTIDO
               private fun handleIntent(intent: Intent) {
                   if (Intent.ACTION_SEND == intent.action && "text/plain" == intent.type) {
                       sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
@@ -118,7 +114,7 @@ workflows:
                       when (call.method) {
                           "getSharedText" -> {
                               result.success(sharedText)
-                              sharedText = null // Lo vaciamos tras leerlo
+                              sharedText = null
                           }
                           "startMocking" -> {
                               val latStr = call.argument<String>("lat")
@@ -126,7 +122,7 @@ workflows:
                               
                               if (latStr != null && lngStr != null) {
                                   if (!isMockAppSelected()) {
-                                      result.error("PERMISSION_DENIED", "La app no esta seleccionada en Opciones de Desarrollador", null)
+                                      result.error("PERMISSION_DENIED", "La app no esta seleccionada", null)
                                       return@setMethodCallHandler
                                   }
 
@@ -156,7 +152,7 @@ workflows:
                                   startActivity(intent)
                                   result.success(true)
                               } catch (e: Exception) {
-                                  result.error("INTENT_ERROR", "No se pudo abrir la configuracion", null)
+                                  result.error("INTENT_ERROR", "Error", null)
                               }
                           }
                           else -> result.notImplemented()
@@ -294,7 +290,6 @@ workflows:
 
                           mockLocation.extras = Bundle().apply { putBoolean("mockLocation", true) }
 
-                          // EL BLINDAJE PERFECTO SIN ERRORES DE COMPILADOR
                           for (p in providers) {
                               try {
                                   val loc = Location(mockLocation)
@@ -306,7 +301,6 @@ workflows:
                                   loc.speed = 0.0f
                                   loc.bearing = 0.0f
                                   
-                                  // Android OS lo marca internamente como MOCK al inyectarlo aquí.
                                   locationManager?.setTestProviderLocation(p, loc)
                               } catch (e: Exception) {}
                           }
