@@ -268,19 +268,13 @@ workflows:
                               mockLocation.speedAccuracyMetersPerSecond = 0.1f
                               mockLocation.bearingAccuracyDegrees = 1.0f
                           }
-                          
-                          // LA MAGIA: Matriz de compatibilidad perfecta para el objeto base
-                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                              mockLocation.isMock = true
-                          } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
-                              @Suppress("DEPRECATION")
-                              mockLocation.isFromMockProvider = true
-                          }
 
+                          // Mantenemos solo el Bundle para máxima compatibilidad con apps antiguas
                           mockLocation.extras = Bundle().apply { 
                               putBoolean("mockLocation", true) 
                           }
 
+                          // Clonación perfecta y limpia para cada provider
                           for (p in providers) {
                               try {
                                   val loc = Location(mockLocation)
@@ -293,15 +287,8 @@ workflows:
 
                                   loc.speed = 0.0f
                                   loc.bearing = 0.0f
-
-                                  // LA MAGIA: Matriz de compatibilidad perfecta para cada clon
-                                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                                      loc.isMock = true
-                                  } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
-                                      @Suppress("DEPRECATION")
-                                      loc.isFromMockProvider = true
-                                  }
                                   
+                                  // Al inyectar aquí, Android OS se encarga internamente de marcarla como MOCK
                                   locationManager?.setTestProviderLocation(p, loc)
                               } catch (e: Exception) {}
                           }
