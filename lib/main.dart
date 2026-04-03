@@ -12,9 +12,12 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:geolocator/geolocator.dart'; // Para leer tu ubicación física real
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  // MAGIA 1: Modo inmersivo para ocultar las barras del sistema de la Tablet
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
   runApp(const InspectorProApp());
 }
 
@@ -31,7 +34,6 @@ class InspectorProApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF263238), primary: const Color(0xFF1976D2)),
         useMaterial3: true,
-        scaffoldBackgroundColor: const Color(0xFFF5F5F5),
       ),
       home: const MapScreen(),
       debugShowCheckedModeBanner: false,
@@ -59,7 +61,7 @@ class LocationService {
       await _channel.invokeMethod('startMocking', {'lat': latStr, 'lng': lngStr});
       return "SUCCESS";
     } on PlatformException catch (e) {
-      return "ERROR";
+      return e.message ?? "ERROR";
     } catch (e) {
       return "ERROR";
     }
@@ -111,112 +113,21 @@ class ValidationService {
     final double speedMs = distanceMeters / timeSeconds;
     final double speedKmh = speedMs * 3.6;
     if (speedKmh > maxSpeedKmh) {
-      return "⚠️ Salto de ${distanceMeters.toStringAsFixed(0)}m detectado.\nVelocidad calculada: ${speedKmh.toStringAsFixed(0)} km/h.";
+      return "⚠️ Salto de ${distanceMeters.toStringAsFixed(0)}m.\nVelocidad: ${speedKmh.toStringAsFixed(0)} km/h.";
     }
     return null;
   }
 
   static String? checkSpainBounds(LatLng pos) {
     if (pos.latitude < 35.0 || pos.latitude > 44.0 || pos.longitude < -10.0 || pos.longitude > 5.0) {
-      return "⚠️ Coordenada fuera de España. Revisa los datos.";
+      return "⚠️ Coordenada fuera de España.";
     }
     return null;
   }
 }
 
 /// ============================================================================
-/// MÓDULO 3: CEREBRO DE CONVERSIÓN Y EXTRACCIÓN DE GOOGLE MAPS
-/// ============================================================================
-class CoordinateConverter {
-  static LatLng? parseInput(String input) {
-    String clean = input.trim().toUpperCase();
-    if (clean.isEmpty) return null;
-
-    try {
-      if (clean.contains('.') || clean.contains(',')) {
-        String numClean = clean.replaceAll('º', '').replaceAll('°', '').replaceAll(' ', '');
-        List<String> parts = numClean.split(RegExp(r'[,|;]'));
-        if (parts.length >= 2) {
-          double lat = double.parse(parts[0]);
-          double lng = double.parse(parts[1]);
-          return LatLng(double.parse(lat.toStringAsFixed(7)), double.parse(lng.toStringAsFixed(7)));
-        }
-      }
-    } catch (_) {}
-
-    try {
-      List<String> parts = clean.split(RegExp(r'\s+'));
-      if (parts.length >= 3) {
-        String zoneStr = parts[0];
-        int zoneNum = int.parse(zoneStr.replaceAll(RegExp(r'[A-Z]'), ''));
-        String zoneLetter = zoneStr.replaceAll(RegExp(r'[0-9]'), '');
-        double easting = double.parse(parts[1]);
-        double northing = double.parse(parts[2]);
-        final latlon = UTM.fromUtm(easting: easting, northing: northing, zoneNumber: zoneNum, zoneLetter: zoneLetter);
-        return LatLng(double.parse(latlon.lat.toStringAsFixed(7)), double.parse(latlon.lon.toStringAsFixed(7)));
-      }
-    } catch (_) {}
-
-    return null; 
-  }
-}
-
-class GeocodingService {
-  Future<LatLng?> searchAddress(String query) async {
-    final LatLng? parsed = CoordinateConverter.parseInput(query);
-    if (parsed != null) return parsed;
-
-    final urlMatch = RegExp(r'(https?://[^\s]+)').firstMatch(query);
-    if (urlMatch != null) {
-      String url = urlMatch.group(0)!;
-      try {
-        final getRes = await http.get(Uri.parse(url));
-        String finalUrl = getRes.request?.url.toString() ?? url;
-
-        final atMatch = RegExp(r'@(-?\d+\.\d+),(-?\d+\.\d+)').firstMatch(finalUrl);
-        if (atMatch != null) {
-          double lat = double.parse(atMatch.group(1)!);
-          double lng = double.parse(atMatch.group(2)!);
-          return LatLng(double.parse(lat.toStringAsFixed(7)), double.parse(lng.toStringAsFixed(7)));
-        }
-        
-        final dMatch = RegExp(r'!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)').firstMatch(finalUrl);
-        if (dMatch != null) {
-          double lat = double.parse(dMatch.group(1)!);
-          double lng = double.parse(dMatch.group(2)!);
-          return LatLng(double.parse(lat.toStringAsFixed(7)), double.parse(lng.toStringAsFixed(7)));
-        }
-
-        final qMatch = RegExp(r'q=(-?\d+\.\d+),(-?\d+\.\d+)').firstMatch(finalUrl);
-        if (qMatch != null) {
-          double lat = double.parse(qMatch.group(1)!);
-          double lng = double.parse(qMatch.group(2)!);
-          return LatLng(double.parse(lat.toStringAsFixed(7)), double.parse(lng.toStringAsFixed(7)));
-        }
-      } catch (e) {
-        debugPrint("Error resolviendo URL Maps: $e");
-      }
-    }
-
-    final Uri nominatimUrl = Uri.parse('https://nominatim.openstreetmap.org/search?q=${Uri.encodeComponent(query)}&format=json&limit=1');
-    try {
-      final response = await http.get(nominatimUrl, headers: {'User-Agent': 'InspectorPro3'});
-      if (response.statusCode == 200) {
-        final List<dynamic> data = json.decode(response.body);
-        if (data.isNotEmpty) {
-          final double lat = double.parse(data[0]['lat'].toString());
-          final double lon = double.parse(data[0]['lon'].toString());
-          return LatLng(double.parse(lat.toStringAsFixed(7)), double.parse(lon.toStringAsFixed(7)));
-        }
-      }
-    } catch (e) {}
-    
-    return null;
-  }
-}
-
-/// ============================================================================
-/// MÓDULO 4: LA PANTALLA PRINCIPAL
+/// MÓDULO 3: LA PANTALLA PRINCIPAL (MAPA 100% PANTALLA COMPLETA)
 /// ============================================================================
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -228,20 +139,17 @@ class MapScreen extends StatefulWidget {
 class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   final MapController _mapController = MapController();
   final LocationService _locationService = LocationService();
-  final GeocodingService _geocodingService = GeocodingService();
   final SystemSettingsService _systemSettingsService = SystemSettingsService();
   
   LatLng _center = const LatLng(36.7213000, -4.4214000); 
   bool _isMocking = false;
   bool _isSatellite = false; 
-  bool _isLoadingSearch = false;
   
   bool _checkSpeed = true;
   bool _checkBounds = false;
   LatLng? _lastInjectedPos;
   DateTime? _lastInjectedTime;
 
-  final TextEditingController _searchController = TextEditingController();
   List<Map<String, dynamic>> _photos = [];
 
   @override
@@ -256,7 +164,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _searchController.dispose();
     super.dispose();
   }
 
@@ -267,21 +174,76 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     }
   }
 
+  // --- ESCÁNER DE ENLACES DE GOOGLE MAPS ---
   Future<void> _checkSharedLinks() async {
     final String? sharedText = await _locationService.getSharedText();
     if (sharedText != null && sharedText.isNotEmpty) {
-      _searchController.text = sharedText;
-      _processSearch(queryToProcess: sharedText);
+      final urlMatch = RegExp(r'(https?://[^\s]+)').firstMatch(sharedText);
+      if (urlMatch != null) {
+        String url = urlMatch.group(0)!;
+        try {
+          final getRes = await http.get(Uri.parse(url));
+          String finalUrl = getRes.request?.url.toString() ?? url;
+
+          final atMatch = RegExp(r'@(-?\d+\.\d+),(-?\d+\.\d+)').firstMatch(finalUrl);
+          if (atMatch != null) {
+            _updateMapCenterFromExtracted(atMatch.group(1)!, atMatch.group(2)!);
+            return;
+          }
+          final dMatch = RegExp(r'!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)').firstMatch(finalUrl);
+          if (dMatch != null) {
+            _updateMapCenterFromExtracted(dMatch.group(1)!, dMatch.group(2)!);
+            return;
+          }
+        } catch (e) {
+          debugPrint("Error resolviendo URL: $e");
+        }
+      }
     }
   }
 
+  void _updateMapCenterFromExtracted(String latStr, String lngStr) {
+    double lat = double.parse(latStr);
+    double lng = double.parse(lngStr);
+    setState(() {
+      _center = LatLng(double.parse(lat.toStringAsFixed(7)), double.parse(lng.toStringAsFixed(7)));
+      _mapController.move(_center, 17.0);
+    });
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Coordenada importada de Google Maps.'), backgroundColor: Colors.green));
+  }
+
   Future<void> _requestPermissions() async {
-    // BLINDAJE ANDROID 13+: Permiso de notificaciones añadido
     await [
       Permission.locationWhenInUse, 
       Permission.locationAlways,
       Permission.notification
     ].request();
+  }
+
+  // --- BOTÓN UBICACIÓN REAL FÍSICA ---
+  Future<void> _goToRealLocation() async {
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Activa el GPS físico del dispositivo.')));
+      return;
+    }
+
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Permiso de ubicación denegado.')));
+        return;
+      }
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Buscando señal real...')));
+    Position position = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+    
+    setState(() {
+      _center = LatLng(double.parse(position.latitude.toStringAsFixed(7)), double.parse(position.longitude.toStringAsFixed(7)));
+      _mapController.move(_center, 17.0);
+    });
   }
 
   void _microAdjust(double latOffset, double lngOffset) {
@@ -294,6 +256,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     });
   }
 
+  // --- GESTIÓN DE FOTOS ---
   Future<void> _loadAndCleanPhotos() async {
     final prefs = await SharedPreferences.getInstance();
     final String? photosJson = prefs.getString('saved_photos');
@@ -334,10 +297,9 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   Future<void> _takeForensicPhoto() async {
     final ImagePicker picker = ImagePicker();
     final XFile? image = await picker.pickImage(source: ImageSource.camera, imageQuality: 80); 
-    
     if (image == null) return;
     
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Estampando datos forenses...')));
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Procesando marca forense...')));
 
     final File imgFile = File(image.path);
     final String latStr = _center.latitude.toStringAsFixed(7);
@@ -355,14 +317,13 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
             x2: decodedImg.width, y2: decodedImg.height, 
             color: img.ColorRgba8(0, 0, 0, 150));
         
-        // CORRECCIÓN DEL COMPILADOR: La fuente ahora es img.arial24 sin guion bajo.
         final String watermark = "INSPECCION TECNICA | LAT: $latStr | LNG: $lngStr | $dateStr";
         img.drawString(decodedImg, watermark, font: img.arial24, x: 20, y: decodedImg.height - 45, color: img.ColorRgb8(255, 255, 255));
         
         await imgFile.writeAsBytes(img.encodeJpg(decodedImg, quality: 90));
       }
     } catch (e) {
-      debugPrint("Error al quemar marca de agua: $e");
+      debugPrint("Error img: $e");
     }
     
     setState(() {
@@ -376,42 +337,31 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     });
     
     _savePhotosToDisk();
-    
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Evidencia Forense Guardada.'), backgroundColor: Colors.green)
-      );
-    }
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Evidencia Guardada.'), backgroundColor: Colors.green));
   }
 
   void _showPhotoGallery() {
     showModalBottomSheet(
       context: context,
       builder: (context) {
-        if (_photos.isEmpty) {
-          return const Padding(padding: EdgeInsets.all(24.0), child: Text('No hay fotos recientes.', style: TextStyle(fontSize: 16), textAlign: TextAlign.center));
-        }
+        if (_photos.isEmpty) return const Padding(padding: EdgeInsets.all(24.0), child: Text('No hay fotos recientes.', textAlign: TextAlign.center));
         return ListView.builder(
           itemCount: _photos.length,
           itemBuilder: (context, index) {
             final f = _photos[index];
             final DateTime date = DateTime.parse(f['timestamp']);
             final String timeString = DateFormat('dd/MM/yyyy HH:mm').format(date);
-            final int daysLeft = 7 - DateTime.now().difference(date).inDays;
             
-            Widget leadingIcon = const Icon(Icons.broken_image, color: Colors.grey);
+            Widget leadingIcon = const Icon(Icons.broken_image);
             if (f.containsKey('photo_path') && f['photo_path'] != null) {
               final file = File(f['photo_path']);
-              if (file.existsSync()) {
-                leadingIcon = ClipRRect(borderRadius: BorderRadius.circular(4), child: Image.file(file, width: 50, height: 50, fit: BoxFit.cover));
-              }
+              if (file.existsSync()) leadingIcon = ClipRRect(borderRadius: BorderRadius.circular(4), child: Image.file(file, width: 50, height: 50, fit: BoxFit.cover));
             }
             
             return ListTile(
               leading: leadingIcon,
               title: Text(timeString, style: const TextStyle(fontWeight: FontWeight.bold)),
-              subtitle: Text('Lat: ${f['lat'].toStringAsFixed(7)}\nLng: ${f['lng'].toStringAsFixed(7)}\nQuedan $daysLeft días'),
-              isThreeLine: true,
+              subtitle: Text('Lat: ${f['lat'].toStringAsFixed(7)}, Lng: ${f['lng'].toStringAsFixed(7)}'),
               trailing: IconButton(
                 icon: const Icon(Icons.delete, color: Colors.red),
                 onPressed: () {
@@ -436,25 +386,102 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> _processSearch({String? queryToProcess}) async {
-    final query = queryToProcess ?? _searchController.text;
-    if (query.isEmpty) return;
-
-    setState(() => _isLoadingSearch = true);
-    FocusScope.of(context).unfocus();
-
-    final LatLng? result = await _geocodingService.searchAddress(query);
+  // --- DIÁLOGO PLANTILLA DE COORDENADAS ---
+  void _showCoordinateInputDialog() {
+    final TextEditingController decLatCtrl = TextEditingController();
+    final TextEditingController decLngCtrl = TextEditingController();
     
-    setState(() => _isLoadingSearch = false);
+    final TextEditingController utmZoneCtrl = TextEditingController();
+    final TextEditingController utmEastCtrl = TextEditingController();
+    final TextEditingController utmNorthCtrl = TextEditingController();
 
-    if (result != null) {
-      _mapController.move(result, 16.0);
-      setState(() => _center = result);
-    } else {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No se pudo interpretar el dato o URL.')));
-    }
+    showDialog(
+      context: context,
+      builder: (context) {
+        return DefaultTabController(
+          length: 3,
+          child: Dialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              height: 400,
+              child: Column(
+                children: [
+                  const Text("🎯 PLANTILLA DE COORDENADAS", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  const SizedBox(height: 10),
+                  const TabBar(
+                    labelColor: Colors.blue,
+                    unselectedLabelColor: Colors.grey,
+                    tabs: [Tab(text: "Decimal"), Tab(text: "UTM"), Tab(text: "DMS")]
+                  ),
+                  Expanded(
+                    child: TabBarView(
+                      children: [
+                        // PESTAÑA DECIMAL
+                        Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            TextField(controller: decLatCtrl, decoration: const InputDecoration(labelText: 'Latitud (Ej: 36.430771)'), keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true)),
+                            const SizedBox(height: 10),
+                            TextField(controller: decLngCtrl, decoration: const InputDecoration(labelText: 'Longitud (Ej: -5.167703)'), keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true)),
+                          ],
+                        ),
+                        // PESTAÑA UTM
+                        Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            TextField(controller: utmZoneCtrl, decoration: const InputDecoration(labelText: 'Zona (Ej: 30S)'), textCapitalization: TextCapitalization.characters),
+                            TextField(controller: utmEastCtrl, decoration: const InputDecoration(labelText: 'Easting (X)'), keyboardType: const TextInputType.numberWithOptions(decimal: true)),
+                            TextField(controller: utmNorthCtrl, decoration: const InputDecoration(labelText: 'Northing (Y)'), keyboardType: const TextInputType.numberWithOptions(decimal: true)),
+                          ],
+                        ),
+                        // PESTAÑA DMS (Simulada para mantener el código claro, pide decimal directo en el campo de momento)
+                        const Center(child: Text("Para DMS, use el formato Decimal o la importación compartida de Google Maps.", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey))),
+                      ],
+                    ),
+                  ),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.blueGrey[900], foregroundColor: Colors.white),
+                      onPressed: () {
+                        LatLng? parsed;
+                        try {
+                          // Evaluar qué controlador tiene texto
+                          if (decLatCtrl.text.isNotEmpty && decLngCtrl.text.isNotEmpty) {
+                            parsed = LatLng(double.parse(decLatCtrl.text.replaceAll(',', '.')), double.parse(decLngCtrl.text.replaceAll(',', '.')));
+                          } else if (utmZoneCtrl.text.isNotEmpty && utmEastCtrl.text.isNotEmpty && utmNorthCtrl.text.isNotEmpty) {
+                            String zone = utmZoneCtrl.text.trim().toUpperCase();
+                            int zNum = int.parse(zone.replaceAll(RegExp(r'[A-Z]'), ''));
+                            String zLet = zone.replaceAll(RegExp(r'[0-9]'), '');
+                            final latlon = UTM.fromUtm(easting: double.parse(utmEastCtrl.text), northing: double.parse(utmNorthCtrl.text), zoneNumber: zNum, zoneLetter: zLet);
+                            parsed = LatLng(latlon.lat, latlon.lon);
+                          }
+                        } catch (e) {
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Formato inválido. Revisa los números.')));
+                        }
+
+                        if (parsed != null) {
+                          setState(() {
+                            _center = LatLng(double.parse(parsed!.latitude.toStringAsFixed(7)), double.parse(parsed.longitude.toStringAsFixed(7)));
+                            _mapController.move(_center, 17.0);
+                          });
+                          Navigator.pop(context);
+                        }
+                      },
+                      child: const Text("ENVIAR AL MAPA"),
+                    ),
+                  )
+                ],
+              ),
+            ),
+          ),
+        );
+      }
+    );
   }
 
+  // --- MOTOR DE INYECCIÓN Y CHEQUEOS ---
   Future<void> _toggleMock() async {
     if (_isMocking) {
       await _locationService.stopMocking();
@@ -463,21 +490,18 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       var status = await Permission.locationWhenInUse.status;
       if (!status.isGranted) {
         await _requestPermissions();
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Debes otorgar permisos de ubicación primero.')));
         return;
       }
       
       if (_checkBounds) {
         final String? boundsWarning = ValidationService.checkSpainBounds(_center);
-        if (boundsWarning != null && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(boundsWarning), backgroundColor: Colors.orange));
-        }
+        if (boundsWarning != null && mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(boundsWarning), backgroundColor: Colors.orange));
       }
 
       if (_checkSpeed && _lastInjectedPos != null && _lastInjectedTime != null) {
         final String? speedWarning = ValidationService.checkJumpConsistency(_lastInjectedPos!, _lastInjectedTime!, _center);
-        if (speedWarning != null && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(speedWarning), backgroundColor: Colors.orange, duration: const Duration(seconds: 4)));
-        }
+        if (speedWarning != null && mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(speedWarning), backgroundColor: Colors.orange));
       }
 
       final String finalLatStr = _center.latitude.toStringAsFixed(7);
@@ -492,15 +516,9 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
           _lastInjectedTime = DateTime.now();
         });
       } else {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Error de permisos en Opciones de Desarrollador.')));
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Fallo en inyección: $result (Verifica Opciones Desarrollador)'), backgroundColor: Colors.red));
       }
     }
-  }
-
-  void _copyCoordinates() {
-    final String textToCopy = '${_center.latitude.toStringAsFixed(7)}, ${_center.longitude.toStringAsFixed(7)}';
-    Clipboard.setData(ClipboardData(text: textToCopy));
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Coordenadas copiadas a precisión 7.'), backgroundColor: Colors.blueGrey, behavior: SnackBarBehavior.floating));
   }
 
   void _showSettings() {
@@ -514,11 +532,10 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Text('Ajustes de Auditoría', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const Text('⚙️ Ajustes de Auditoría', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                   const Divider(),
                   SwitchListTile(
                     title: const Text('Alerta de Velocidad (>120km/h)'),
-                    subtitle: const Text('Avisa si hay un salto imposible'),
                     value: _checkSpeed,
                     onChanged: (bool value) {
                       setModalState(() => _checkSpeed = value);
@@ -527,7 +544,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                   ),
                   SwitchListTile(
                     title: const Text('Límite Geográfico (España)'),
-                    subtitle: const Text('Avisa si la coordenada está fuera'),
                     value: _checkBounds,
                     onChanged: (bool value) {
                       setModalState(() => _checkBounds = value);
@@ -553,192 +569,143 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        bool isTablet = constraints.maxWidth > 650;
-
-        Widget mapArea = Stack(
-          children: [
-            FlutterMap(
-              mapController: _mapController,
-              options: MapOptions(
-                initialCenter: _center,
-                initialZoom: 17.0,
-                onPositionChanged: (pos, hasGesture) {
-                  if (pos.center != null && !_isMocking) {
-                    setState(() => _center = pos.center!);
-                  }
-                },
-                interactionOptions: InteractionOptions(
-                  flags: _isMocking ? InteractiveFlag.none : InteractiveFlag.all
-                )
-              ),
-              children: [
-                TileLayer(
-                  urlTemplate: _isSatellite 
-                    ? 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}'
-                    : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                  userAgentPackageName: 'com.example.v4.inspector',
-                ),
-                CircleLayer(
-                  circles: [
-                    CircleMarker(point: _center, radius: 15, useRadiusInMeter: true, color: Colors.yellowAccent.withOpacity(0.2), borderColor: Colors.yellow, borderStrokeWidth: 1),
-                    CircleMarker(point: _center, radius: 5, useRadiusInMeter: true, color: Colors.greenAccent.withOpacity(0.3), borderColor: Colors.green, borderStrokeWidth: 2),
-                  ]
-                ),
-              ],
+    return Scaffold(
+      // SE ELIMINA EL SPLIT SCREEN (ROW). AHORA ES UN STACK 100% COMPLETO.
+      body: Stack(
+        children: [
+          // 1. EL MAPA (FONDO COMPLETO)
+          FlutterMap(
+            mapController: _mapController,
+            options: MapOptions(
+              initialCenter: _center,
+              initialZoom: 17.0,
+              onPositionChanged: (pos, hasGesture) {
+                if (pos.center != null && !_isMocking) setState(() => _center = pos.center!);
+              },
+              interactionOptions: InteractionOptions(flags: _isMocking ? InteractiveFlag.none : InteractiveFlag.all)
             ),
-            
-            Center(child: Icon(_isMocking ? Icons.gps_fixed : Icons.add_circle_outline, color: _isMocking ? Colors.green : Colors.red, size: 40)),
-            
-            Positioned(
-              top: 20, left: 15, right: 15,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                decoration: BoxDecoration(color: Colors.white.withOpacity(0.95), borderRadius: BorderRadius.circular(8), boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)]),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _searchController,
-                        decoration: const InputDecoration(hintText: 'Pega enlace de Maps, UTM, DMS o Decimales...', border: InputBorder.none),
-                        onSubmitted: (_) => _processSearch(),
-                      ),
-                    ),
-                    _isLoadingSearch 
-                      ? const Padding(padding: EdgeInsets.all(12.0), child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)))
-                      : IconButton(icon: const Icon(Icons.search, color: Colors.blue), onPressed: _processSearch),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        );
-
-        Widget controlPanel = Container(
-          width: isTablet ? 380 : double.infinity,
-          color: Colors.white,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                color: Colors.blueGrey[900],
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text('PANEL TÉCNICO', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
-                    Row(
-                      children: [
-                        IconButton(icon: const Icon(Icons.photo_library, color: Colors.white), onPressed: _showPhotoGallery, tooltip: 'Historial', constraints: const BoxConstraints(), padding: EdgeInsets.zero),
-                        const SizedBox(width: 16),
-                        IconButton(icon: const Icon(Icons.settings, color: Colors.white), onPressed: _showSettings, tooltip: 'Ajustes', constraints: const BoxConstraints(), padding: EdgeInsets.zero),
-                      ],
-                    )
-                  ],
-                ),
+              TileLayer(
+                urlTemplate: _isSatellite ? 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}' : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                userAgentPackageName: 'com.example.v4.inspector',
               ),
-              
-              Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text("WGS84 EXACTO (7 Dec)", style: TextStyle(color: Colors.grey, fontSize: 12, fontWeight: FontWeight.bold)),
-                          Text("Lat: ${_center.latitude.toStringAsFixed(7)}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                          Text("Lng: ${_center.longitude.toStringAsFixed(7)}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                          TextButton.icon(
-                            icon: const Icon(Icons.copy, size: 16), label: const Text('Copiar'),
-                            onPressed: _copyCoordinates, style: TextButton.styleFrom(padding: EdgeInsets.zero, alignment: Alignment.centerLeft),
-                          )
-                        ],
-                      ),
-                    ),
-                    if (!_isMocking)
-                      Column(
-                        children: [
-                          IconButton(icon: const Icon(Icons.arrow_drop_up), padding: EdgeInsets.zero, constraints: const BoxConstraints(), onPressed: () => _microAdjust(0.000009, 0)),
-                          Row(
-                            children: [
-                              IconButton(icon: const Icon(Icons.arrow_left), padding: EdgeInsets.zero, constraints: const BoxConstraints(), onPressed: () => _microAdjust(0, -0.000009 / cos(_center.latitude * pi / 180))),
-                              const SizedBox(width: 24),
-                              IconButton(icon: const Icon(Icons.arrow_right), padding: EdgeInsets.zero, constraints: const BoxConstraints(), onPressed: () => _microAdjust(0, 0.000009 / cos(_center.latitude * pi / 180))),
-                            ],
-                          ),
-                          IconButton(icon: const Icon(Icons.arrow_drop_down), padding: EdgeInsets.zero, constraints: const BoxConstraints(), onPressed: () => _microAdjust(-0.000009, 0)),
-                        ],
-                      )
-                  ],
-                ),
-              ),
-              
-              const Divider(height: 1),
-              
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(backgroundColor: Colors.grey[200], foregroundColor: Colors.black87, elevation: 0),
-                        icon: Icon(_isSatellite ? Icons.map : Icons.satellite_alt, size: 18),
-                        label: Text(_isSatellite ? "Calles" : "Satélite", style: const TextStyle(fontSize: 12)),
-                        onPressed: () => setState(() => _isSatellite = !_isSatellite),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(backgroundColor: Colors.grey[200], foregroundColor: Colors.black87, elevation: 0),
-                        icon: const Icon(Icons.camera_alt, size: 18),
-                        label: const Text("Evidencia", style: TextStyle(fontSize: 12)),
-                        onPressed: _takeForensicPhoto,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                child: SrunElevatedButton(
-                  onPressed: _toggleMock,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _isMocking ? Colors.red[700] : Colors.green[700],
-                    minimumSize: const Size(double.infinity, 55),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))
-                  ),
-                  child: Text(
-                    _isMocking ? "🛑 DETENER SIMULACIÓN" : "🚀 INICIAR SIMULACIÓN BLINDADA",
-                    style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-                  ),
-                ),
+              CircleLayer(
+                circles: [
+                  CircleMarker(point: _center, radius: 15, useRadiusInMeter: true, color: Colors.yellowAccent.withOpacity(0.2), borderColor: Colors.yellow, borderStrokeWidth: 1),
+                  CircleMarker(point: _center, radius: 5, useRadiusInMeter: true, color: Colors.greenAccent.withOpacity(0.3), borderColor: Colors.green, borderStrokeWidth: 2),
+                ]
               ),
             ],
           ),
-        );
+          
+          Center(child: Icon(_isMocking ? Icons.gps_fixed : Icons.add_circle_outline, color: _isMocking ? Colors.green : Colors.red, size: 44)),
 
-        return Scaffold(
-          body: isTablet 
-            ? Row(
-                children: [
-                  Expanded(child: mapArea),
-                  controlPanel,
-                ],
-              )
-            : Column(
-                children: [
-                  Expanded(child: mapArea),
-                  controlPanel,
-                ],
+          // 2. BARRA DE HERRAMIENTAS SUPERIOR FLOTANTE
+          SafeArea(
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 10.0),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(color: Colors.blueGrey[900]?.withOpacity(0.9), borderRadius: BorderRadius.circular(12), boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 6)]),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      IconButton(icon: const Icon(Icons.my_location, color: Colors.white), onPressed: _goToRealLocation, tooltip: 'Mi Ubicación Física'),
+                      Container(width: 1, height: 30, color: Colors.grey),
+                      IconButton(icon: Icon(_isSatellite ? Icons.map : Icons.satellite_alt, color: Colors.white), onPressed: () => setState(() => _isSatellite = !_isSatellite), tooltip: 'Cambiar Vista'),
+                      Container(width: 1, height: 30, color: Colors.grey),
+                      IconButton(icon: const Icon(Icons.camera_alt, color: Colors.white), onPressed: _takeForensicPhoto, tooltip: 'Foto Técnica'),
+                      Container(width: 1, height: 30, color: Colors.grey),
+                      IconButton(icon: const Icon(Icons.photo_library, color: Colors.white), onPressed: _showPhotoGallery, tooltip: 'Historial'),
+                      Container(width: 1, height: 30, color: Colors.grey),
+                      IconButton(icon: const Icon(Icons.settings, color: Colors.white), onPressed: _showSettings, tooltip: 'Ajustes'),
+                    ],
+                  ),
+                ),
               ),
-        );
-      }
+            ),
+          ),
+
+          // 3. CRUCETA LATERAL (D-PAD)
+          if (!_isMocking)
+            Positioned(
+              right: 16,
+              top: MediaQuery.of(context).size.height / 2 - 60,
+              child: Container(
+                decoration: BoxDecoration(color: Colors.white.withOpacity(0.9), borderRadius: BorderRadius.circular(40), boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)]),
+                child: Column(
+                  children: [
+                    IconButton(icon: const Icon(Icons.arrow_drop_up), padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 40, minHeight: 40), onPressed: () => _microAdjust(0.000009, 0)),
+                    Row(
+                      children: [
+                        IconButton(icon: const Icon(Icons.arrow_left), padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 40, minHeight: 40), onPressed: () => _microAdjust(0, -0.000009 / cos(_center.latitude * pi / 180))),
+                        const SizedBox(width: 20),
+                        IconButton(icon: const Icon(Icons.arrow_right), padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 40, minHeight: 40), onPressed: () => _microAdjust(0, 0.000009 / cos(_center.latitude * pi / 180))),
+                      ],
+                    ),
+                    IconButton(icon: const Icon(Icons.arrow_drop_down), padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 40, minHeight: 40), onPressed: () => _microAdjust(-0.000009, 0)),
+                  ],
+                ),
+              ),
+            ),
+
+          // 4. PANEL INFERIOR (COORDENADAS Y GATILLO)
+          SafeArea(
+            child: Align(
+              alignment: Alignment.bottomCenter,
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Container(
+                  width: 500, // En tablets no ocupará toda la pantalla de ancho, en móviles sí.
+                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 10, spreadRadius: 2)]),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text("OBJETIVO (WGS84 - 7 Dec)", style: TextStyle(color: Colors.grey, fontSize: 12, fontWeight: FontWeight.bold)),
+                                Text("Lat: ${_center.latitude.toStringAsFixed(7)}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                                Text("Lng: ${_center.longitude.toStringAsFixed(7)}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                              ],
+                            ),
+                            ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(backgroundColor: Colors.blueGrey[100], foregroundColor: Colors.black87),
+                              icon: const Icon(Icons.edit_location_alt, size: 18),
+                              label: const Text("PLANTILLA"),
+                              onPressed: _showCoordinateInputDialog,
+                            )
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                        SrunElevatedButton(
+                          onPressed: _toggleMock,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _isMocking ? Colors.red[700] : Colors.green[700],
+                            minimumSize: const Size(double.infinity, 60),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))
+                          ),
+                          child: Text(
+                            _isMocking ? "🛑 DETENER SIMULACIÓN" : "🚀 INICIAR SIMULACIÓN BLINDADA",
+                            style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold, letterSpacing: 1),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
