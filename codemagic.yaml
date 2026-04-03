@@ -19,7 +19,9 @@ workflows:
           fi
           
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="com.example.v4.inspector_pro_v4">
+              
               <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
               <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
               <uses-permission android:name="android.permission.ACCESS_MOCK_LOCATION" />
@@ -37,8 +39,9 @@ workflows:
                   android:name="${applicationName}"
                   android:icon="@mipmap/ic_launcher"
                   android:requestLegacyExternalStorage="true">
+                  
                   <activity
-                      android:name="com.example.v4.inspector_pro_v4.MainActivity"
+                      android:name=".MainActivity"
                       android:exported="true"
                       android:launchMode="singleTop"
                       android:theme="@style/LaunchTheme"
@@ -56,10 +59,15 @@ workflows:
                   </activity>
                   
                   <service
-                      android:name="com.example.v4.inspector_pro_v4.MockLocationService"
+                      android:name=".MockLocationService"
                       android:enabled="true"
                       android:exported="false"
                       android:foregroundServiceType="location" />
+                  
+                  <meta-data
+                      android:name="flutterEmbedding"
+                      android:value="2" />
+                      
               </application>
           </manifest>
           EOF
@@ -85,7 +93,6 @@ workflows:
                   MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
                       when (call.method) {
                           "startMocking" -> {
-                              // RECIBIMOS STRINGS (TEXTO INMUTABLE)
                               val latStr = call.argument<String>("lat")
                               val lngStr = call.argument<String>("lng")
                               
@@ -165,7 +172,6 @@ workflows:
           import android.location.Location
           import android.location.LocationManager
           import android.os.Build
-          import android.os.Bundle
           import android.os.Handler
           import android.os.IBinder
           import android.os.Looper
@@ -184,7 +190,6 @@ workflows:
               private var mockRunnable: Runnable? = null
               private var wakeLock: PowerManager.WakeLock? = null
               
-              // SECUESTRO TOTAL DE TODOS LOS PROVEEDORES
               private val providers = arrayOf(
                   LocationManager.GPS_PROVIDER, 
                   LocationManager.NETWORK_PROVIDER,
@@ -203,7 +208,7 @@ workflows:
                   
                   val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
                   wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "InspectorPro::WakeLock")
-                  wakeLock?.acquire(10 * 60 * 1000L) // Mantiene la app viva con pantalla apagada
+                  wakeLock?.acquire(10 * 60 * 1000L) 
                   
                   val channelId = "inspector_v4_channel"
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -232,7 +237,6 @@ workflows:
 
                   mockRunnable = object : Runnable {
                       override fun run() {
-                          // BLINDAJE MATEMÁTICO: Evita la cola binaria de Java (12 decimales basura)
                           val exactLat = BigDecimal(latStr).setScale(7, RoundingMode.HALF_UP).toDouble()
                           val exactLng = BigDecimal(lngStr).setScale(7, RoundingMode.HALF_UP).toDouble()
 
@@ -241,7 +245,6 @@ workflows:
                           mockLocation.longitude = exactLng
                           mockLocation.altitude = 10.0
                           
-                          // TIMESTAMPS OBLIGATORIOS Y COMPLETOS
                           mockLocation.time = System.currentTimeMillis()
                           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
                               mockLocation.elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
@@ -254,7 +257,6 @@ workflows:
                               mockLocation.bearingAccuracyDegrees = 1.0f
                           }
                           
-                          // MARCADOR MOCK EXPLÍCITO
                           mockLocation.extras = Bundle().apply { 
                               putBoolean("mockLocation", true) 
                           }
@@ -271,7 +273,6 @@ workflows:
                               fusedLocationClient.setMockLocation(mockLocation)
                           } catch (e: Exception) {}
 
-                          // Alta frecuencia para evitar que Android lea el WiFi real
                           mockHandler.postDelayed(this, 400)
                       }
                   }
