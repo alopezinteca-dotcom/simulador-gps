@@ -163,11 +163,10 @@ class CoordinateConverter {
 
 class GeocodingService {
   Future<LatLng?> searchAddress(String query) async {
-    // 1. Validar si es coordenada directa
     final LatLng? parsed = CoordinateConverter.parseInput(query);
     if (parsed != null) return parsed;
 
-    // 2. EXTRAER URL DE GOOGLE MAPS (A partir del botón Compartir)
+    // MEJORA: Regex reforzado para atrapar todas las variantes de Google Maps
     final urlMatch = RegExp(r'(https?://[^\s]+)').firstMatch(query);
     if (urlMatch != null) {
       String url = urlMatch.group(0)!;
@@ -175,7 +174,6 @@ class GeocodingService {
         final getRes = await http.get(Uri.parse(url));
         String finalUrl = getRes.request?.url.toString() ?? url;
 
-        // Buscar @lat,lng
         final atMatch = RegExp(r'@(-?\d+\.\d+),(-?\d+\.\d+)').firstMatch(finalUrl);
         if (atMatch != null) {
           double lat = double.parse(atMatch.group(1)!);
@@ -183,11 +181,17 @@ class GeocodingService {
           return LatLng(double.parse(lat.toStringAsFixed(7)), double.parse(lng.toStringAsFixed(7)));
         }
         
-        // Buscar !3dlat!4dlng
         final dMatch = RegExp(r'!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)').firstMatch(finalUrl);
         if (dMatch != null) {
           double lat = double.parse(dMatch.group(1)!);
           double lng = double.parse(dMatch.group(2)!);
+          return LatLng(double.parse(lat.toStringAsFixed(7)), double.parse(lng.toStringAsFixed(7)));
+        }
+
+        final qMatch = RegExp(r'q=(-?\d+\.\d+),(-?\d+\.\d+)').firstMatch(finalUrl);
+        if (qMatch != null) {
+          double lat = double.parse(qMatch.group(1)!);
+          double lng = double.parse(qMatch.group(2)!);
           return LatLng(double.parse(lat.toStringAsFixed(7)), double.parse(lng.toStringAsFixed(7)));
         }
       } catch (e) {
@@ -195,7 +199,6 @@ class GeocodingService {
       }
     }
 
-    // 3. Fallback a servidor de direcciones (Nominatim)
     final Uri nominatimUrl = Uri.parse('https://nominatim.openstreetmap.org/search?q=${Uri.encodeComponent(query)}&format=json&limit=1');
     try {
       final response = await http.get(nominatimUrl, headers: {'User-Agent': 'InspectorPro3'});
@@ -214,7 +217,7 @@ class GeocodingService {
 }
 
 /// ============================================================================
-/// MÓDULO 4: LA PANTALLA PRINCIPAL CON DETECCIÓN DE ENLACES
+/// MÓDULO 4: LA PANTALLA PRINCIPAL
 /// ============================================================================
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -248,7 +251,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _requestPermissions();
     _loadAndCleanPhotos();
-    _checkSharedLinks(); // Escuchar enlaces al abrir la app de cero
+    _checkSharedLinks(); 
   }
 
   @override
@@ -258,7 +261,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     super.dispose();
   }
 
-  // Escuchar enlaces cuando la app ya estaba abierta y recibe un texto de Google Maps
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
@@ -279,7 +281,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   }
 
   void _microAdjust(double latOffset, double lngOffset) {
-    if (_isMocking) return;
+    if (_isMocking) return; // BLINDAJE: La cruceta se desactiva si el mock está encendido
     setState(() {
       double newLat = _center.latitude + latOffset;
       double newLng = _center.longitude + lngOffset;
@@ -349,7 +351,8 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
             x2: decodedImg.width, y2: decodedImg.height, 
             color: img.ColorRgba8(0, 0, 0, 150));
         
-        final String watermark = "INSPECCIÓN TÉCNICA | LAT: $latStr | LNG: $lngStr | $dateStr";
+        // MEJORA: Texto limpio en mayúsculas ASCII para evitar crasheos de codificación
+        final String watermark = "INSPECCION TECNICA | LAT: $latStr | LNG: $lngStr | $dateStr";
         img.drawString(decodedImg, watermark, font: img.arial_24, x: 20, y: decodedImg.height - 45, color: img.ColorRgb8(255, 255, 255));
         
         await imgFile.writeAsBytes(img.encodeJpg(decodedImg, quality: 90));
