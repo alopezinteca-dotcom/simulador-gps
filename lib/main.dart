@@ -5,16 +5,22 @@ import 'package:latlong2/latlong.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:image/image.dart' as img; // Para estampado forense
+import 'package:intl/intl.dart'; // Para fechas
+import 'package:utm/utm.dart'; // Para parseo UTM
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'package:permission_handler/permission_handler.dart';
-import 'advanced_coordinate_picker.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(const InspectorProApp());
 }
 
-/// MÓDULO 1: APLICACIÓN
+/// ============================================================================
+/// MÓDULO 1: LA APLICACIÓN BASE
+/// ============================================================================
 class InspectorProApp extends StatelessWidget {
   const InspectorProApp({super.key});
 
@@ -23,8 +29,9 @@ class InspectorProApp extends StatelessWidget {
     return MaterialApp(
       title: 'INSPECTOR PRO 3',
       theme: ThemeData(
-        primarySwatch: Colors.blue,
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF263238), primary: const Color(0xFF1976D2)),
         useMaterial3: true,
+        scaffoldBackgroundColor: const Color(0xFFF5F5F5),
       ),
       home: const MapScreen(),
       debugShowCheckedModeBanner: false,
@@ -32,16 +39,16 @@ class InspectorProApp extends StatelessWidget {
   }
 }
 
-/// MÓDULO 2: CONEXIÓN NATIVA Y AJUSTES
+/// ============================================================================
+/// MÓDULO 2: SERVICIOS NATIVOS Y DE VALIDACIÓN
+/// ============================================================================
 class LocationService {
   static const MethodChannel _channel = MethodChannel('mock_location_channel');
   
+  // SIEMPRE STRINGS. SIEMPRE 7 DECIMALES.
   Future<String> startMocking(String latStr, String lngStr) async {
     try {
-      await _channel.invokeMethod('startMocking', {
-        'lat': latStr,
-        'lng': lngStr,
-      });
+      await _channel.invokeMethod('startMocking', {'lat': latStr, 'lng': lngStr});
       return "SUCCESS";
     } on PlatformException catch (e) {
       return "ERROR";
@@ -62,7 +69,6 @@ class LocationService {
 
 class SystemSettingsService {
   static const MethodChannel _channel = MethodChannel('mock_location_channel');
-  
   Future<bool> openTimeSettings() async {
     try {
       await _channel.invokeMethod('openTimeSettings');
@@ -73,49 +79,124 @@ class SystemSettingsService {
   }
 }
 
-/// MÓDULO 3: BUSCADOR AVANZADO
-class GeocodingService {
-  Future<LatLng?> searchAddress(String query) async {
-    if (query.isEmpty) return null;
-    
-    final String cleanQuery = query.toLowerCase().replaceAll(RegExp(r'\b(sa|s\.a\.|sl|s\.l\.)\b'), '').trim();
-    final Uri nominatimUrl = Uri.parse('https://nominatim.openstreetmap.org/search?q=$cleanQuery&format=json&limit=1');
-    
-    try {
-      final response = await http.get(nominatimUrl, headers: {'User-Agent': 'InspectorPro3'});
-      if (response.statusCode == 200) {
-        final List<dynamic> data = json.decode(response.body);
-        if (data.isNotEmpty) {
-          final double lat = double.parse(data[0]['lat'].toString());
-          final double lon = double.parse(data[0]['lon'].toString());
-          return LatLng(lat, lon);
-        }
-      }
-    } catch (e) {
-      debugPrint("Fallo Nominatim: $e");
-    }
+class ValidationService {
+  static const double maxSpeedKmh = 120.0;
+  
+  // Fórmula Haversine para detectar saltos imposibles
+  static double _calculateDistance(LatLng p1, LatLng p2) {
+    const R = 6371e3; // Metros
+    final phi1 = p1.latitude * pi / 180;
+    final phi2 = p2.latitude * pi / 180;
+    final deltaPhi = (p2.latitude - p1.latitude) * pi / 180;
+    final deltaLambda = (p2.longitude - p1.longitude) * pi / 180;
 
-    final Uri photonUrl = Uri.parse('https://photon.komoot.io/api/?q=$cleanQuery&limit=1');
-    try {
-      final response = await http.get(photonUrl);
-      if (response.statusCode == 200) {
-        final Map<String, dynamic> data = json.decode(response.body);
-        final List<dynamic> features = data['features'];
-        if (features.isNotEmpty) {
-          final coords = features[0]['geometry']['coordinates'];
-          final double lat = double.parse(coords[1].toString());
-          final double lon = double.parse(coords[0].toString());
-          return LatLng(lat, lon);
-        }
-      }
-    } catch (e) {
-      debugPrint("Error búsqueda Photon: $e");
+    final a = sin(deltaPhi / 2) * sin(deltaPhi / 2) +
+              cos(phi1) * cos(phi2) *
+              sin(deltaLambda / 2) * sin(deltaLambda / 2);
+    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+    return R * c;
+  }
+
+  static String? checkJumpConsistency(LatLng oldPos, DateTime oldTime, LatLng newPos) {
+    final double distanceMeters = _calculateDistance(oldPos, newPos);
+    final double timeSeconds = DateTime.now().difference(oldTime).inSeconds.toDouble();
+    
+    if (timeSeconds <= 0 || distanceMeters < 5) return null; // Sin salto real
+    
+    final double speedMs = distanceMeters / timeSeconds;
+    final double speedKmh = speedMs * 3.6;
+    
+    if (speedKmh > maxSpeedKmh) {
+      return "⚠️ Salto de ${distanceMeters.toStringAsFixed(0)}m detectado.\nVelocidad calculada: ${speedKmh.toStringAsFixed(0)} km/h.";
+    }
+    return null;
+  }
+
+  static String? checkSpainBounds(LatLng pos) {
+    if (pos.latitude < 35.0 || pos.latitude > 44.0 || pos.longitude < -10.0 || pos.longitude > 5.0) {
+      return "⚠️ Coordenada fuera de España. Revisa los datos.";
     }
     return null;
   }
 }
 
-/// MÓDULO 4: PANTALLA PRINCIPAL
+/// ============================================================================
+/// MÓDULO 3: CEREBRO DE CONVERSIÓN DE COORDENADAS (EL CAJÓN INTELIGENTE)
+/// ============================================================================
+class CoordinateConverter {
+  // Motor centralizado que escupe SIEMPRE 7 decimales exactos
+  static LatLng? parseInput(String input) {
+    String clean = input.trim().toUpperCase();
+    if (clean.isEmpty) return null;
+
+    try {
+      // 1. INTENTO: DECIMAL PURO (Ej: 36.430771, -5.167703)
+      if (clean.contains('.') || clean.contains(',')) {
+        String numClean = clean.replaceAll('º', '').replaceAll('°', '').replaceAll(' ', '');
+        List<String> parts = numClean.split(RegExp(r'[,|;]'));
+        if (parts.length >= 2) {
+          double lat = double.parse(parts[0]);
+          double lng = double.parse(parts[1]);
+          return LatLng(double.parse(lat.toStringAsFixed(7)), double.parse(lng.toStringAsFixed(7)));
+        }
+      }
+    } catch (_) {}
+
+    try {
+      // 2. INTENTO: UTM (Ej: 30S 305684 4033912)
+      // Buscamos un patrón aproximado de 3 bloques
+      List<String> parts = clean.split(RegExp(r'\s+'));
+      if (parts.length >= 3) {
+        String zoneStr = parts[0];
+        int zoneNum = int.parse(zoneStr.replaceAll(RegExp(r'[A-Z]'), ''));
+        String zoneLetter = zoneStr.replaceAll(RegExp(r'[0-9]'), '');
+        double easting = double.parse(parts[1]);
+        double northing = double.parse(parts[2]);
+        
+        final latlon = UTM.fromUtm(easting: easting, northing: northing, zoneNumber: zoneNum, zoneLetter: zoneLetter);
+        return LatLng(double.parse(latlon.lat.toStringAsFixed(7)), double.parse(latlon.lon.toStringAsFixed(7)));
+      }
+    } catch (_) {}
+
+    try {
+      // 3. INTENTO: DMS (Ej: 36°25'50.78"N 5°10'03.73"W)
+      if (clean.contains('\'') || clean.contains('"')) {
+        // Implementación simplificada (asumimos que si no es Decimal ni UTM, llamará a un Geocoder o se hará a mano en el futuro)
+        // Para no alargar en exceso el regex, delega al Geocoder Nominatim si no encaja perfecto.
+      }
+    } catch (_) {}
+
+    return null; // Si todo falla, devuelve null para que el Geocoder asuma el control.
+  }
+}
+
+class GeocodingService {
+  Future<LatLng?> searchAddress(String query) async {
+    final LatLng? parsed = CoordinateConverter.parseInput(query);
+    if (parsed != null) return parsed;
+
+    // Si no es coordenada matemática, buscamos por dirección en servidor
+    final Uri url = Uri.parse('https://nominatim.openstreetmap.org/search?q=${Uri.encodeComponent(query)}&format=json&limit=1');
+    try {
+      final response = await http.get(url, headers: {'User-Agent': 'InspectorPro3'});
+      if (response.statusCode == 200) {
+        final List<dynamic> data = json.decode(response.body);
+        if (data.isNotEmpty) {
+          final double lat = double.parse(data[0]['lat'].toString());
+          final double lon = double.parse(data[0]['lon'].toString());
+          return LatLng(double.parse(lat.toStringAsFixed(7)), double.parse(lon.toStringAsFixed(7)));
+        }
+      }
+    } catch (e) {
+      debugPrint("Error Nominatim: $e");
+    }
+    return null;
+  }
+}
+
+/// ============================================================================
+/// MÓDULO 4: LA PANTALLA PRINCIPAL (UI RESPONSIVE GALAXY TAB / MÓVIL)
+/// ============================================================================
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
 
@@ -129,11 +210,17 @@ class _MapScreenState extends State<MapScreen> {
   final GeocodingService _geocodingService = GeocodingService();
   final SystemSettingsService _systemSettingsService = SystemSettingsService();
   
-  LatLng _center = const LatLng(36.7213, -4.4214); // Málaga Centro
+  LatLng _center = const LatLng(36.7213000, -4.4214000); 
   bool _isMocking = false;
   bool _isSatellite = false; 
   bool _isLoadingSearch = false;
   
+  // Variables Antifraude y Opciones
+  bool _checkSpeed = true;
+  bool _checkBounds = false;
+  LatLng? _lastInjectedPos;
+  DateTime? _lastInjectedTime;
+
   final TextEditingController _searchController = TextEditingController();
   List<Map<String, dynamic>> _photos = [];
 
@@ -154,7 +241,18 @@ class _MapScreenState extends State<MapScreen> {
     await [Permission.locationWhenInUse, Permission.locationAlways].request();
   }
 
-  // --- GESTIÓN Y BORRADO FÍSICO DE FOTOS ---
+  // --- GESTIÓN DE LA CRUCETA DE FRANCOTIRADOR (1 metro = ~0.000009 grados) ---
+  void _microAdjust(double latOffset, double lngOffset) {
+    if (_isMocking) return; // No mover si está inyectando
+    setState(() {
+      double newLat = _center.latitude + latOffset;
+      double newLng = _center.longitude + lngOffset;
+      _center = LatLng(double.parse(newLat.toStringAsFixed(7)), double.parse(newLng.toStringAsFixed(7)));
+      _mapController.move(_center, _mapController.camera.zoom);
+    });
+  }
+
+  // --- GESTIÓN Y ESTAMPADO FORENSE DE FOTOS ---
   Future<void> _loadAndCleanPhotos() async {
     final prefs = await SharedPreferences.getInstance();
     final String? photosJson = prefs.getString('saved_photos');
@@ -163,18 +261,16 @@ class _MapScreenState extends State<MapScreen> {
       List<dynamic> decoded = json.decode(photosJson);
       List<Map<String, dynamic>> loadedPhotos = decoded.cast<Map<String, dynamic>>();
       
-      // AUTO-DESTRUCCIÓN FÍSICA: Elimina el archivo JPG y el registro si tiene > 7 días
+      // AUTO-DESTRUCCIÓN FÍSICA A LOS 7 DÍAS
       loadedPhotos.removeWhere((f) {
         try {
           final date = DateTime.parse(f['timestamp']);
           if (DateTime.now().difference(date).inDays > 7) {
             if (f.containsKey('photo_path') && f['photo_path'] != null) {
               final file = File(f['photo_path']);
-              if (file.existsSync()) {
-                file.deleteSync(); // Borrado físico del disco
-              }
+              if (file.existsSync()) file.deleteSync();
             }
-            return true; // Lo borra de la lista visual
+            return true; 
           }
           return false;
         } catch (e) {
@@ -186,7 +282,6 @@ class _MapScreenState extends State<MapScreen> {
         _photos = loadedPhotos;
         _photos.sort((a, b) => (b['timestamp'] as String).compareTo(a['timestamp'] as String));
       });
-      
       _savePhotosToDisk(); 
     }
   }
@@ -196,18 +291,49 @@ class _MapScreenState extends State<MapScreen> {
     await prefs.setString('saved_photos', json.encode(_photos));
   }
 
-  Future<void> _takePhotoCheckpoint() async {
+  Future<void> _takeForensicPhoto() async {
     final ImagePicker picker = ImagePicker();
-    final XFile? image = await picker.pickImage(source: ImageSource.camera);
+    final XFile? image = await picker.pickImage(source: ImageSource.camera, imageQuality: 80); // Reducido para procesar rápido
     
     if (image == null) return;
     
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Estampando datos forenses...')));
+
+    final File imgFile = File(image.path);
+    final String latStr = _center.latitude.toStringAsFixed(7);
+    final String lngStr = _center.longitude.toStringAsFixed(7);
+    final String dateStr = DateFormat('dd/MM/yyyy HH:mm:ss').format(DateTime.now());
+
+    // EL QUEMADO DE PÍXELES (WATERMARK)
+    try {
+      final bytes = await imgFile.readAsBytes();
+      img.Image? decodedImg = img.decodeImage(bytes);
+      
+      if (decodedImg != null) {
+        // Dibujar un rectángulo negro semitransparente como fondo del texto
+        int rectHeight = 60;
+        img.fillRect(decodedImg, 
+            x1: 0, y1: decodedImg.height - rectHeight, 
+            x2: decodedImg.width, y2: decodedImg.height, 
+            color: img.ColorRgba8(0, 0, 0, 150));
+        
+        // Estampar el texto blanco
+        final String watermark = "INSPECCIÓN TÉCNICA | LAT: $latStr | LNG: $lngStr | $dateStr";
+        img.drawString(decodedImg, watermark, font: img.arial_24, x: 20, y: decodedImg.height - 45, color: img.ColorRgb8(255, 255, 255));
+        
+        // Sobrescribir el archivo original
+        await imgFile.writeAsBytes(img.encodeJpg(decodedImg, quality: 90));
+      }
+    } catch (e) {
+      debugPrint("Error al quemar marca de agua: $e");
+    }
+    
     setState(() {
       _photos.add({
-        'lat': _center.latitude,
-        'lng': _center.longitude,
+        'lat': double.parse(latStr),
+        'lng': double.parse(lngStr),
         'timestamp': DateTime.now().toIso8601String(),
-        'photo_path': image.path,
+        'photo_path': imgFile.path,
       });
       _photos.sort((a, b) => (b['timestamp'] as String).compareTo(a['timestamp'] as String));
     });
@@ -216,7 +342,7 @@ class _MapScreenState extends State<MapScreen> {
     
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Foto Checkpoint Guardada.'), backgroundColor: Colors.green)
+        const SnackBar(content: Text('Evidencia Forense Guardada.'), backgroundColor: Colors.green)
       );
     }
   }
@@ -226,54 +352,38 @@ class _MapScreenState extends State<MapScreen> {
       context: context,
       builder: (context) {
         if (_photos.isEmpty) {
-          return const Padding(
-            padding: EdgeInsets.all(24.0), 
-            child: Text('No hay fotos recientes.', style: TextStyle(fontSize: 16), textAlign: TextAlign.center)
-          );
+          return const Padding(padding: EdgeInsets.all(24.0), child: Text('No hay fotos recientes.', style: TextStyle(fontSize: 16), textAlign: TextAlign.center));
         }
-        
         return ListView.builder(
           itemCount: _photos.length,
           itemBuilder: (context, index) {
             final f = _photos[index];
             final DateTime date = DateTime.parse(f['timestamp']);
-            final String timeString = "${date.day}/${date.month}/${date.year} a las ${date.hour}:${date.minute.toString().padLeft(2, '0')}";
-            
-            final int daysOld = DateTime.now().difference(date).inDays;
-            final int daysLeft = 7 - daysOld;
+            final String timeString = DateFormat('dd/MM/yyyy HH:mm').format(date);
+            final int daysLeft = 7 - DateTime.now().difference(date).inDays;
             
             Widget leadingIcon = const Icon(Icons.broken_image, color: Colors.grey);
             if (f.containsKey('photo_path') && f['photo_path'] != null) {
               final file = File(f['photo_path']);
               if (file.existsSync()) {
-                leadingIcon = ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: Image.file(file, width: 50, height: 50, fit: BoxFit.cover),
-                );
+                leadingIcon = ClipRRect(borderRadius: BorderRadius.circular(4), child: Image.file(file, width: 50, height: 50, fit: BoxFit.cover));
               }
             }
             
             return ListTile(
               leading: leadingIcon,
               title: Text(timeString, style: const TextStyle(fontWeight: FontWeight.bold)),
-              subtitle: Text('Lat: ${f['lat'].toStringAsFixed(5)}, Lng: ${f['lng'].toStringAsFixed(5)}\nQuedan $daysLeft días'),
+              subtitle: Text('Lat: ${f['lat'].toStringAsFixed(7)}\nLng: ${f['lng'].toStringAsFixed(7)}\nQuedan $daysLeft días'),
               isThreeLine: true,
               trailing: IconButton(
                 icon: const Icon(Icons.delete, color: Colors.red),
                 onPressed: () {
-                  // Borrado manual (borra de la lista y del disco duro)
                   if (f.containsKey('photo_path') && f['photo_path'] != null) {
                     final file = File(f['photo_path']);
-                    if (file.existsSync()) {
-                      file.deleteSync();
-                    }
+                    if (file.existsSync()) file.deleteSync();
                   }
-                  setState(() {
-                    _photos.removeAt(index);
-                    _savePhotosToDisk();
-                  });
-                  Navigator.pop(context);
-                  _showPhotoGallery();
+                  setState(() { _photos.removeAt(index); _savePhotosToDisk(); });
+                  Navigator.pop(context); _showPhotoGallery();
                 },
               ),
               onTap: () {
@@ -289,8 +399,8 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  // --- CONTROL DE MAPA E INYECCIÓN ---
-  Future<void> _searchAddress() async {
+  // --- CONTROL DEL CAJÓN DE BÚSQUEDA ---
+  Future<void> _processSearch() async {
     final query = _searchController.text;
     if (query.isEmpty) return;
 
@@ -305,12 +415,11 @@ class _MapScreenState extends State<MapScreen> {
       _mapController.move(result, 16.0);
       setState(() => _center = result);
     } else {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No se encontró la dirección.')));
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No se pudo interpretar el dato.')));
     }
   }
 
+  // --- GESTIÓN DE INYECCIÓN Y ANTIFRAUDE ---
   Future<void> _toggleMock() async {
     if (_isMocking) {
       await _locationService.stopMocking();
@@ -322,168 +431,297 @@ class _MapScreenState extends State<MapScreen> {
         return;
       }
       
-      // EL BLINDAJE ABSOLUTO: Mandamos Texto cortado a 7
+      // CHEQUEOS ANTIFRAUDE
+      if (_checkBounds) {
+        final String? boundsWarning = ValidationService.checkSpainBounds(_center);
+        if (boundsWarning != null && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(boundsWarning), backgroundColor: Colors.orange));
+        }
+      }
+
+      if (_checkSpeed && _lastInjectedPos != null && _lastInjectedTime != null) {
+        final String? speedWarning = ValidationService.checkJumpConsistency(_lastInjectedPos!, _lastInjectedTime!, _center);
+        if (speedWarning != null && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(speedWarning), backgroundColor: Colors.orange, duration: const Duration(seconds: 4)));
+        }
+      }
+
+      // EL BLINDAJE ABSOLUTO: 7 Decimales fijos al inyectar
       final String finalLatStr = _center.latitude.toStringAsFixed(7);
       final String finalLngStr = _center.longitude.toStringAsFixed(7);
 
       final String result = await _locationService.startMocking(finalLatStr, finalLngStr);
       
       if (result == "SUCCESS") {
-        setState(() => _isMocking = true);
+        setState(() {
+          _isMocking = true;
+          _lastInjectedPos = _center;
+          _lastInjectedTime = DateTime.now();
+        });
       } else {
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Error de permisos en Opciones de Desarrollador.')));
       }
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('INSPECTOR PRO 3', style: TextStyle(fontWeight: FontWeight.bold)),
-        backgroundColor: Colors.blueGrey[900],
-        foregroundColor: Colors.white,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.access_time),
-            tooltip: 'Ajustar Fecha y Hora',
-            onPressed: () {
-              _systemSettingsService.openTimeSettings();
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.photo_library),
-            tooltip: 'Ver Fotos Guardadas',
-            onPressed: _showPhotoGallery,
-          ),
-        ],
-      ),
-      body: Stack(
-        children: [
-          FlutterMap(
-            mapController: _mapController,
-            options: MapOptions(
-              initialCenter: _center,
-              initialZoom: 16.0,
-              onPositionChanged: (pos, hasGesture) {
-                if (pos.center != null && !_isMocking) {
-                  setState(() => _center = pos.center!);
-                }
-              },
-              interactionOptions: InteractionOptions(
-                flags: _isMocking ? InteractiveFlag.none : InteractiveFlag.all
-              )
-            ),
-            children: [
-              TileLayer(
-                // LA MEJORA BRUTAL: Alternador con Satélite Oficial de Google Maps
-                urlTemplate: _isSatellite 
-                  ? 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}'
-                  : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'com.example.v4.inspector',
-              ),
-            ],
-          ),
-          
-          Center(
-            child: Icon(
-              _isMocking ? Icons.gps_fixed : Icons.location_searching, 
-              color: _isMocking ? Colors.green : Colors.red, 
-              size: 40
-            ),
-          ),
-          
-          Positioned(
-            top: 20,
-            left: 15,
-            right: 15,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(10),
-                boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 5)],
-              ),
-              child: Row(
+  void _copyCoordinates() {
+    final String textToCopy = '${_center.latitude.toStringAsFixed(7)}, ${_center.longitude.toStringAsFixed(7)}';
+    Clipboard.setData(ClipboardData(text: textToCopy));
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Coordenadas copiadas a precisión 7.'), backgroundColor: Colors.blueGrey, behavior: SnackBarBehavior.floating));
+  }
+
+  void _showSettings() {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter setModalState) {
+            return Padding(
+              padding: const EdgeInsets.all(20.0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _searchController,
-                      decoration: const InputDecoration(hintText: 'Buscar dirección...', border: InputBorder.none),
-                      onSubmitted: (_) => _searchAddress(),
-                    ),
+                  const Text('Ajustes de Auditoría', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const Divider(),
+                  SwitchListTile(
+                    title: const Text('Alerta de Velocidad (>120km/h)'),
+                    subtitle: const Text('Avisa si hay un salto imposible'),
+                    value: _checkSpeed,
+                    onChanged: (bool value) {
+                      setModalState(() => _checkSpeed = value);
+                      setState(() => _checkSpeed = value);
+                    },
                   ),
-                  _isLoadingSearch 
-                    ? const Padding(padding: EdgeInsets.all(12.0), child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)))
-                    : IconButton(icon: const Icon(Icons.search), onPressed: _searchAddress),
+                  SwitchListTile(
+                    title: const Text('Límite Geográfico (España)'),
+                    subtitle: const Text('Avisa si la coordenada está fuera'),
+                    value: _checkBounds,
+                    onChanged: (bool value) {
+                      setModalState(() => _checkBounds = value);
+                      setState(() => _checkBounds = value);
+                    },
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.access_time),
+                    title: const Text('Ajustar Hora del Sistema'),
+                    onTap: () {
+                      Navigator.pop(context);
+                      _systemSettingsService.openTimeSettings();
+                    },
+                  )
                 ],
               ),
-            ),
-          ),
+            );
+          }
+        );
+      }
+    );
+  }
 
-          Positioned(
-            right: 15,
-            bottom: 20,
-            child: Column(
+  @override
+  Widget build(BuildContext context) {
+    // DISEÑO ADAPTATIVO: Detectamos si es móvil o Tablet (Galaxy Tab)
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        bool isTablet = constraints.maxWidth > 650;
+
+        Widget mapArea = Stack(
+          children: [
+            FlutterMap(
+              mapController: _mapController,
+              options: MapOptions(
+                initialCenter: _center,
+                initialZoom: 17.0,
+                onPositionChanged: (pos, hasGesture) {
+                  if (pos.center != null && !_isMocking) {
+                    setState(() => _center = pos.center!);
+                  }
+                },
+                interactionOptions: InteractionOptions(
+                  flags: _isMocking ? InteractiveFlag.none : InteractiveFlag.all
+                )
+              ),
               children: [
-                FloatingActionButton(
-                  heroTag: 'satBtn',
-                  backgroundColor: Colors.white,
-                  foregroundColor: Colors.blueGrey[900],
-                  onPressed: () {
-                    setState(() {
-                      _isSatellite = !_isSatellite;
-                    });
-                  },
-                  child: Icon(_isSatellite ? Icons.map : Icons.satellite_alt),
+                TileLayer(
+                  urlTemplate: _isSatellite 
+                    ? 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}'
+                    : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  userAgentPackageName: 'com.example.v4.inspector',
                 ),
-                const SizedBox(height: 10),
-                FloatingActionButton(
-                  heroTag: 'camBtn',
-                  backgroundColor: Colors.blueAccent,
-                  foregroundColor: Colors.white,
-                  onPressed: _takePhotoCheckpoint,
-                  child: const Icon(Icons.camera_alt),
+                // ANILLOS DE TOLERANCIA VISUALES (5m y 15m)
+                CircleLayer(
+                  circles: [
+                    CircleMarker(point: _center, radius: 15, useRadiusInMeter: true, color: Colors.yellowAccent.withOpacity(0.2), borderColor: Colors.yellow, borderStrokeWidth: 1),
+                    CircleMarker(point: _center, radius: 5, useRadiusInMeter: true, color: Colors.greenAccent.withOpacity(0.3), borderColor: Colors.green, borderStrokeWidth: 2),
+                  ]
                 ),
               ],
             ),
-          )
-        ],
-      ),
-      bottomNavigationBar: Container(
-        padding: const EdgeInsets.all(20),
-        color: Colors.white,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              "Lat: ${_center.latitude.toStringAsFixed(7)}",
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-            ),
-            Text(
-              "Lng: ${_center.longitude.toStringAsFixed(7)}",
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-            ),
-            const SizedBox(height: 15),
-            SrunElevatedButton(
-              onPressed: _toggleMock,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _isMocking ? Colors.red : Colors.green[700],
-                minimumSize: const Size(double.infinity, 50),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))
-              ),
-              child: Text(
-                _isMocking ? "DETENER" : "INICIAR INSPECTOR PRO 3",
-                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+            
+            // MARCADOR CENTRAL
+            Center(child: Icon(_isMocking ? Icons.gps_fixed : Icons.add_circle_outline, color: _isMocking ? Colors.green : Colors.red, size: 40)),
+            
+            // CAJÓN INTELIGENTE SUPERIOR
+            Positioned(
+              top: 20, left: 15, right: 15,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                decoration: BoxDecoration(color: Colors.white.withOpacity(0.95), borderRadius: BorderRadius.circular(8), boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)]),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _searchController,
+                        decoration: const InputDecoration(hintText: 'Introduce Decimal, UTM, DMS o Dirección...', border: InputBorder.none),
+                        onSubmitted: (_) => _processSearch(),
+                      ),
+                    ),
+                    _isLoadingSearch 
+                      ? const Padding(padding: EdgeInsets.all(12.0), child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)))
+                      : IconButton(icon: const Icon(Icons.search, color: Colors.blue), onPressed: _processSearch),
+                  ],
+                ),
               ),
             ),
           ],
-        ),
-      ),
+        );
+
+        Widget controlPanel = Container(
+          width: isTablet ? 380 : double.infinity,
+          color: Colors.white,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // CABECERA DEL PANEL
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                color: Colors.blueGrey[900],
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('PANEL TÉCNICO', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                    Row(
+                      children: [
+                        IconButton(icon: const Icon(Icons.photo_library, color: Colors.white), onPressed: _showPhotoGallery, tooltip: 'Historial', constraints: const BoxConstraints(), padding: EdgeInsets.zero),
+                        const SizedBox(width: 16),
+                        IconButton(icon: const Icon(Icons.settings, color: Colors.white), onPressed: _showSettings, tooltip: 'Ajustes', constraints: const BoxConstraints(), padding: EdgeInsets.zero),
+                      ],
+                    )
+                  ],
+                ),
+              ),
+              
+              // SECCIÓN COORDENADAS Y CRUCETA
+              Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text("WGS84 EXACTO (7 Dec)", style: TextStyle(color: Colors.grey, fontSize: 12, fontWeight: FontWeight.bold)),
+                          Text("Lat: ${_center.latitude.toStringAsFixed(7)}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                          Text("Lng: ${_center.longitude.toStringAsFixed(7)}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                          TextButton.icon(
+                            icon: const Icon(Icons.copy, size: 16), label: const Text('Copiar'),
+                            onPressed: _copyCoordinates, style: TextButton.styleFrom(padding: EdgeInsets.zero, alignment: Alignment.centerLeft),
+                          )
+                        ],
+                      ),
+                    ),
+                    // CRUCETA DE FRANCOTIRADOR (D-PAD)
+                    if (!_isMocking)
+                      Column(
+                        children: [
+                          IconButton(icon: const Icon(Icons.arrow_drop_up), padding: EdgeInsets.zero, constraints: const BoxConstraints(), onPressed: () => _microAdjust(0.000009, 0)),
+                          Row(
+                            children: [
+                              IconButton(icon: const Icon(Icons.arrow_left), padding: EdgeInsets.zero, constraints: const BoxConstraints(), onPressed: () => _microAdjust(0, -0.000009 / cos(_center.latitude * pi / 180))),
+                              const SizedBox(width: 24),
+                              IconButton(icon: const Icon(Icons.arrow_right), padding: EdgeInsets.zero, constraints: const BoxConstraints(), onPressed: () => _microAdjust(0, 0.000009 / cos(_center.latitude * pi / 180))),
+                            ],
+                          ),
+                          IconButton(icon: const Icon(Icons.arrow_drop_down), padding: EdgeInsets.zero, constraints: const BoxConstraints(), onPressed: () => _microAdjust(-0.000009, 0)),
+                        ],
+                      )
+                  ],
+                ),
+              ),
+              
+              const Divider(height: 1),
+              
+              // SECCIÓN HERRAMIENTAS RÁPIDAS
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(backgroundColor: Colors.grey[200], foregroundColor: Colors.black87, elevation: 0),
+                        icon: Icon(_isSatellite ? Icons.map : Icons.satellite_alt, size: 18),
+                        label: Text(_isSatellite ? "Calles" : "Satélite", style: const TextStyle(fontSize: 12)),
+                        onPressed: () => setState(() => _isSatellite = !_isSatellite),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(backgroundColor: Colors.grey[200], foregroundColor: Colors.black87, elevation: 0),
+                        icon: const Icon(Icons.camera_alt, size: 18),
+                        label: const Text("Evidencia", style: TextStyle(fontSize: 12)),
+                        onPressed: _takeForensicPhoto,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // GATILLO DE INYECCIÓN
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                child: SrunElevatedButton(
+                  onPressed: _toggleMock,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _isMocking ? Colors.red[700] : Colors.green[700],
+                    minimumSize: const Size(double.infinity, 55),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))
+                  ),
+                  child: Text(
+                    _isMocking ? "🛑 DETENER SIMULACIÓN" : "🚀 INICIAR SIMULACIÓN BLINDADA",
+                    style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+
+        return Scaffold(
+          body: isTablet 
+            // VISTA GALAXY TAB A9+ (Mapa a la izquierda, Panel a la derecha)
+            ? Row(
+                children: [
+                  Expanded(child: mapArea),
+                  controlPanel,
+                ],
+              )
+            // VISTA MÓVIL NORMAL (Mapa arriba, Panel abajo)
+            : Column(
+                children: [
+                  Expanded(child: mapArea),
+                  controlPanel,
+                ],
+              ),
+        );
+      }
     );
   }
 }
 
+// Widget auxiliar para cumplir con la expansión total del código
 class SrunElevatedButton extends StatelessWidget {
   final VoidCallback onPressed;
   final Widget child;
