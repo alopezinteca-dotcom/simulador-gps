@@ -172,6 +172,7 @@ workflows:
           import android.location.Location
           import android.location.LocationManager
           import android.os.Build
+          import android.os.Bundle
           import android.os.Handler
           import android.os.IBinder
           import android.os.Looper
@@ -226,6 +227,12 @@ workflows:
                   
                   for (provider in providers) {
                       try {
+                          locationManager?.removeTestProvider(provider)
+                      } catch (e: Exception) {}
+                  }
+
+                  for (provider in providers) {
+                      try {
                           locationManager?.addTestProvider(provider, false, false, false, false, true, true, true, 0, 5)
                           locationManager?.setTestProviderEnabled(provider, true)
                       } catch (e: Exception) {}
@@ -241,9 +248,14 @@ workflows:
                           val exactLng = BigDecimal(lngStr).setScale(7, RoundingMode.HALF_UP).toDouble()
 
                           val mockLocation = Location(LocationManager.GPS_PROVIDER)
+                          
+                          mockLocation.provider = LocationManager.GPS_PROVIDER
                           mockLocation.latitude = exactLat
                           mockLocation.longitude = exactLng
                           mockLocation.altitude = 10.0
+                          
+                          mockLocation.speed = 0.0f
+                          mockLocation.bearing = 0.0f
                           
                           mockLocation.time = System.currentTimeMillis()
                           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
@@ -257,6 +269,12 @@ workflows:
                               mockLocation.bearingAccuracyDegrees = 1.0f
                           }
                           
+                          // SIMPLIFICACIÓN: Un solo check oficial para marcar como MOCK el objeto base
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
+                              @Suppress("DEPRECATION")
+                              mockLocation.isFromMockProvider = true
+                          }
+
                           mockLocation.extras = Bundle().apply { 
                               putBoolean("mockLocation", true) 
                           }
@@ -265,15 +283,34 @@ workflows:
                               try {
                                   val loc = Location(mockLocation)
                                   loc.provider = p
+                                  
+                                  // AJUSTE: Re-estampar el tiempo exacto en cada clon
+                                  loc.time = System.currentTimeMillis()
+                                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
+                                      loc.elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
+                                  }
+
+                                  // AJUSTE: Reforzar velocidad y rumbo nulo en cada clon
+                                  loc.speed = 0.0f
+                                  loc.bearing = 0.0f
+
+                                  // AJUSTE: Reforzar flag MOCK en cada clon individual
+                                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
+                                      @Suppress("DEPRECATION")
+                                      loc.isFromMockProvider = true
+                                  }
+                                  
                                   locationManager?.setTestProviderLocation(p, loc)
                               } catch (e: Exception) {}
                           }
                           
                           try {
+                              fusedLocationClient.setMockMode(true)
                               fusedLocationClient.setMockLocation(mockLocation)
+                              fusedLocationClient.flushLocations()
                           } catch (e: Exception) {}
 
-                          mockHandler.postDelayed(this, 400)
+                          mockHandler.postDelayed(this, 500)
                       }
                   }
                   mockHandler.post(mockRunnable!!)
