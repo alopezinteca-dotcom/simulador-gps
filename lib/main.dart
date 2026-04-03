@@ -166,7 +166,6 @@ class GeocodingService {
     final LatLng? parsed = CoordinateConverter.parseInput(query);
     if (parsed != null) return parsed;
 
-    // MEJORA: Regex reforzado para atrapar todas las variantes de Google Maps
     final urlMatch = RegExp(r'(https?://[^\s]+)').firstMatch(query);
     if (urlMatch != null) {
       String url = urlMatch.group(0)!;
@@ -277,11 +276,16 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _requestPermissions() async {
-    await [Permission.locationWhenInUse, Permission.locationAlways].request();
+    // BLINDAJE ANDROID 13+: Permiso de notificaciones añadido
+    await [
+      Permission.locationWhenInUse, 
+      Permission.locationAlways,
+      Permission.notification
+    ].request();
   }
 
   void _microAdjust(double latOffset, double lngOffset) {
-    if (_isMocking) return; // BLINDAJE: La cruceta se desactiva si el mock está encendido
+    if (_isMocking) return;
     setState(() {
       double newLat = _center.latitude + latOffset;
       double newLng = _center.longitude + lngOffset;
@@ -351,9 +355,9 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
             x2: decodedImg.width, y2: decodedImg.height, 
             color: img.ColorRgba8(0, 0, 0, 150));
         
-        // MEJORA: Texto limpio en mayúsculas ASCII para evitar crasheos de codificación
+        // CORRECCIÓN DEL COMPILADOR: La fuente ahora es img.arial24 sin guion bajo.
         final String watermark = "INSPECCION TECNICA | LAT: $latStr | LNG: $lngStr | $dateStr";
-        img.drawString(decodedImg, watermark, font: img.arial_24, x: 20, y: decodedImg.height - 45, color: img.ColorRgb8(255, 255, 255));
+        img.drawString(decodedImg, watermark, font: img.arial24, x: 20, y: decodedImg.height - 45, color: img.ColorRgb8(255, 255, 255));
         
         await imgFile.writeAsBytes(img.encodeJpg(decodedImg, quality: 90));
       }
