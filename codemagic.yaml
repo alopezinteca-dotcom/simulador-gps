@@ -56,6 +56,11 @@ workflows:
                           <action android:name="android.intent.action.MAIN"/>
                           <category android:name="android.intent.category.LAUNCHER"/>
                       </intent-filter>
+                      <intent-filter>
+                          <action android:name="android.intent.action.SEND" />
+                          <category android:name="android.intent.category.DEFAULT" />
+                          <data android:mimeType="text/plain" />
+                      </intent-filter>
                   </activity>
                   
                   <service
@@ -79,6 +84,7 @@ workflows:
           import android.content.Context
           import android.content.Intent
           import android.os.Build
+          import android.os.Bundle
           import androidx.annotation.NonNull
           import io.flutter.embedding.android.FlutterActivity
           import io.flutter.embedding.engine.FlutterEngine
@@ -86,12 +92,34 @@ workflows:
 
           class MainActivity: FlutterActivity() {
               private val CHANNEL = "mock_location_channel"
+              private var sharedText: String? = null
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  handleIntent(intent)
+              }
+
+              override fun onNewIntent(intent: Intent) {
+                  super.onNewIntent(intent)
+                  handleIntent(intent)
+              }
+
+              // ATRAPAMOS EL ENLACE COMPARTIDO
+              private fun handleIntent(intent: Intent) {
+                  if (Intent.ACTION_SEND == intent.action && "text/plain" == intent.type) {
+                      sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
+                  }
+              }
 
               override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
                   super.configureFlutterEngine(flutterEngine)
                   
                   MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
                       when (call.method) {
+                          "getSharedText" -> {
+                              result.success(sharedText)
+                              sharedText = null // Lo vaciamos tras leerlo
+                          }
                           "startMocking" -> {
                               val latStr = call.argument<String>("lat")
                               val lngStr = call.argument<String>("lng")
@@ -226,9 +254,7 @@ workflows:
                   startForeground(1, notification)
                   
                   for (provider in providers) {
-                      try {
-                          locationManager?.removeTestProvider(provider)
-                      } catch (e: Exception) {}
+                      try { locationManager?.removeTestProvider(provider) } catch (e: Exception) {}
                   }
 
                   for (provider in providers) {
@@ -238,9 +264,7 @@ workflows:
                       } catch (e: Exception) {}
                   }
                   
-                  try {
-                      fusedLocationClient.setMockMode(true)
-                  } catch (e: Exception) {}
+                  try { fusedLocationClient.setMockMode(true) } catch (e: Exception) {}
 
                   mockRunnable = object : Runnable {
                       override fun run() {
@@ -253,7 +277,6 @@ workflows:
                           mockLocation.latitude = exactLat
                           mockLocation.longitude = exactLng
                           mockLocation.altitude = 10.0
-                          
                           mockLocation.speed = 0.0f
                           mockLocation.bearing = 0.0f
                           
@@ -269,26 +292,21 @@ workflows:
                               mockLocation.bearingAccuracyDegrees = 1.0f
                           }
 
-                          // Mantenemos solo el Bundle para máxima compatibilidad con apps antiguas
-                          mockLocation.extras = Bundle().apply { 
-                              putBoolean("mockLocation", true) 
-                          }
+                          mockLocation.extras = Bundle().apply { putBoolean("mockLocation", true) }
 
-                          // Clonación perfecta y limpia para cada provider
+                          // EL BLINDAJE PERFECTO SIN ERRORES DE COMPILADOR
                           for (p in providers) {
                               try {
                                   val loc = Location(mockLocation)
                                   loc.provider = p
-                                  
                                   loc.time = System.currentTimeMillis()
                                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
                                       loc.elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
                                   }
-
                                   loc.speed = 0.0f
                                   loc.bearing = 0.0f
                                   
-                                  // Al inyectar aquí, Android OS se encarga internamente de marcarla como MOCK
+                                  // Android OS lo marca internamente como MOCK al inyectarlo aquí.
                                   locationManager?.setTestProviderLocation(p, loc)
                               } catch (e: Exception) {}
                           }
