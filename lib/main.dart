@@ -5,9 +5,9 @@ import 'package:latlong2/latlong.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:image/image.dart' as img; // Para estampado forense
-import 'package:intl/intl.dart'; // Para fechas
-import 'package:utm/utm.dart'; // Para parseo UTM
+import 'package:image/image.dart' as img;
+import 'package:intl/intl.dart';
+import 'package:utm/utm.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -45,7 +45,15 @@ class InspectorProApp extends StatelessWidget {
 class LocationService {
   static const MethodChannel _channel = MethodChannel('mock_location_channel');
   
-  // SIEMPRE STRINGS. SIEMPRE 7 DECIMALES.
+  Future<String?> getSharedText() async {
+    try {
+      final String? result = await _channel.invokeMethod('getSharedText');
+      return result;
+    } catch (e) {
+      return null;
+    }
+  }
+
   Future<String> startMocking(String latStr, String lngStr) async {
     try {
       await _channel.invokeMethod('startMocking', {'lat': latStr, 'lng': lngStr});
@@ -82,9 +90,8 @@ class SystemSettingsService {
 class ValidationService {
   static const double maxSpeedKmh = 120.0;
   
-  // Fórmula Haversine para detectar saltos imposibles
   static double _calculateDistance(LatLng p1, LatLng p2) {
-    const R = 6371e3; // Metros
+    const R = 6371e3;
     final phi1 = p1.latitude * pi / 180;
     final phi2 = p2.latitude * pi / 180;
     final deltaPhi = (p2.latitude - p1.latitude) * pi / 180;
@@ -100,12 +107,9 @@ class ValidationService {
   static String? checkJumpConsistency(LatLng oldPos, DateTime oldTime, LatLng newPos) {
     final double distanceMeters = _calculateDistance(oldPos, newPos);
     final double timeSeconds = DateTime.now().difference(oldTime).inSeconds.toDouble();
-    
-    if (timeSeconds <= 0 || distanceMeters < 5) return null; // Sin salto real
-    
+    if (timeSeconds <= 0 || distanceMeters < 5) return null; 
     final double speedMs = distanceMeters / timeSeconds;
     final double speedKmh = speedMs * 3.6;
-    
     if (speedKmh > maxSpeedKmh) {
       return "⚠️ Salto de ${distanceMeters.toStringAsFixed(0)}m detectado.\nVelocidad calculada: ${speedKmh.toStringAsFixed(0)} km/h.";
     }
@@ -121,16 +125,14 @@ class ValidationService {
 }
 
 /// ============================================================================
-/// MÓDULO 3: CEREBRO DE CONVERSIÓN DE COORDENADAS (EL CAJÓN INTELIGENTE)
+/// MÓDULO 3: CEREBRO DE CONVERSIÓN Y EXTRACCIÓN DE GOOGLE MAPS
 /// ============================================================================
 class CoordinateConverter {
-  // Motor centralizado que escupe SIEMPRE 7 decimales exactos
   static LatLng? parseInput(String input) {
     String clean = input.trim().toUpperCase();
     if (clean.isEmpty) return null;
 
     try {
-      // 1. INTENTO: DECIMAL PURO (Ej: 36.430771, -5.167703)
       if (clean.contains('.') || clean.contains(',')) {
         String numClean = clean.replaceAll('º', '').replaceAll('°', '').replaceAll(' ', '');
         List<String> parts = numClean.split(RegExp(r'[,|;]'));
@@ -143,8 +145,6 @@ class CoordinateConverter {
     } catch (_) {}
 
     try {
-      // 2. INTENTO: UTM (Ej: 30S 305684 4033912)
-      // Buscamos un patrón aproximado de 3 bloques
       List<String> parts = clean.split(RegExp(r'\s+'));
       if (parts.length >= 3) {
         String zoneStr = parts[0];
@@ -152,33 +152,53 @@ class CoordinateConverter {
         String zoneLetter = zoneStr.replaceAll(RegExp(r'[0-9]'), '');
         double easting = double.parse(parts[1]);
         double northing = double.parse(parts[2]);
-        
         final latlon = UTM.fromUtm(easting: easting, northing: northing, zoneNumber: zoneNum, zoneLetter: zoneLetter);
         return LatLng(double.parse(latlon.lat.toStringAsFixed(7)), double.parse(latlon.lon.toStringAsFixed(7)));
       }
     } catch (_) {}
 
-    try {
-      // 3. INTENTO: DMS (Ej: 36°25'50.78"N 5°10'03.73"W)
-      if (clean.contains('\'') || clean.contains('"')) {
-        // Implementación simplificada (asumimos que si no es Decimal ni UTM, llamará a un Geocoder o se hará a mano en el futuro)
-        // Para no alargar en exceso el regex, delega al Geocoder Nominatim si no encaja perfecto.
-      }
-    } catch (_) {}
-
-    return null; // Si todo falla, devuelve null para que el Geocoder asuma el control.
+    return null; 
   }
 }
 
 class GeocodingService {
   Future<LatLng?> searchAddress(String query) async {
+    // 1. Validar si es coordenada directa
     final LatLng? parsed = CoordinateConverter.parseInput(query);
     if (parsed != null) return parsed;
 
-    // Si no es coordenada matemática, buscamos por dirección en servidor
-    final Uri url = Uri.parse('https://nominatim.openstreetmap.org/search?q=${Uri.encodeComponent(query)}&format=json&limit=1');
+    // 2. EXTRAER URL DE GOOGLE MAPS (A partir del botón Compartir)
+    final urlMatch = RegExp(r'(https?://[^\s]+)').firstMatch(query);
+    if (urlMatch != null) {
+      String url = urlMatch.group(0)!;
+      try {
+        final getRes = await http.get(Uri.parse(url));
+        String finalUrl = getRes.request?.url.toString() ?? url;
+
+        // Buscar @lat,lng
+        final atMatch = RegExp(r'@(-?\d+\.\d+),(-?\d+\.\d+)').firstMatch(finalUrl);
+        if (atMatch != null) {
+          double lat = double.parse(atMatch.group(1)!);
+          double lng = double.parse(atMatch.group(2)!);
+          return LatLng(double.parse(lat.toStringAsFixed(7)), double.parse(lng.toStringAsFixed(7)));
+        }
+        
+        // Buscar !3dlat!4dlng
+        final dMatch = RegExp(r'!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)').firstMatch(finalUrl);
+        if (dMatch != null) {
+          double lat = double.parse(dMatch.group(1)!);
+          double lng = double.parse(dMatch.group(2)!);
+          return LatLng(double.parse(lat.toStringAsFixed(7)), double.parse(lng.toStringAsFixed(7)));
+        }
+      } catch (e) {
+        debugPrint("Error resolviendo URL Maps: $e");
+      }
+    }
+
+    // 3. Fallback a servidor de direcciones (Nominatim)
+    final Uri nominatimUrl = Uri.parse('https://nominatim.openstreetmap.org/search?q=${Uri.encodeComponent(query)}&format=json&limit=1');
     try {
-      final response = await http.get(url, headers: {'User-Agent': 'InspectorPro3'});
+      final response = await http.get(nominatimUrl, headers: {'User-Agent': 'InspectorPro3'});
       if (response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body);
         if (data.isNotEmpty) {
@@ -187,15 +207,14 @@ class GeocodingService {
           return LatLng(double.parse(lat.toStringAsFixed(7)), double.parse(lon.toStringAsFixed(7)));
         }
       }
-    } catch (e) {
-      debugPrint("Error Nominatim: $e");
-    }
+    } catch (e) {}
+    
     return null;
   }
 }
 
 /// ============================================================================
-/// MÓDULO 4: LA PANTALLA PRINCIPAL (UI RESPONSIVE GALAXY TAB / MÓVIL)
+/// MÓDULO 4: LA PANTALLA PRINCIPAL CON DETECCIÓN DE ENLACES
 /// ============================================================================
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -204,7 +223,7 @@ class MapScreen extends StatefulWidget {
   State<MapScreen> createState() => _MapScreenState();
 }
 
-class _MapScreenState extends State<MapScreen> {
+class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   final MapController _mapController = MapController();
   final LocationService _locationService = LocationService();
   final GeocodingService _geocodingService = GeocodingService();
@@ -215,7 +234,6 @@ class _MapScreenState extends State<MapScreen> {
   bool _isSatellite = false; 
   bool _isLoadingSearch = false;
   
-  // Variables Antifraude y Opciones
   bool _checkSpeed = true;
   bool _checkBounds = false;
   LatLng? _lastInjectedPos;
@@ -227,23 +245,41 @@ class _MapScreenState extends State<MapScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _requestPermissions();
     _loadAndCleanPhotos();
+    _checkSharedLinks(); // Escuchar enlaces al abrir la app de cero
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _searchController.dispose();
     super.dispose();
+  }
+
+  // Escuchar enlaces cuando la app ya estaba abierta y recibe un texto de Google Maps
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkSharedLinks();
+    }
+  }
+
+  Future<void> _checkSharedLinks() async {
+    final String? sharedText = await _locationService.getSharedText();
+    if (sharedText != null && sharedText.isNotEmpty) {
+      _searchController.text = sharedText;
+      _processSearch(queryToProcess: sharedText);
+    }
   }
 
   Future<void> _requestPermissions() async {
     await [Permission.locationWhenInUse, Permission.locationAlways].request();
   }
 
-  // --- GESTIÓN DE LA CRUCETA DE FRANCOTIRADOR (1 metro = ~0.000009 grados) ---
   void _microAdjust(double latOffset, double lngOffset) {
-    if (_isMocking) return; // No mover si está inyectando
+    if (_isMocking) return;
     setState(() {
       double newLat = _center.latitude + latOffset;
       double newLng = _center.longitude + lngOffset;
@@ -252,7 +288,6 @@ class _MapScreenState extends State<MapScreen> {
     });
   }
 
-  // --- GESTIÓN Y ESTAMPADO FORENSE DE FOTOS ---
   Future<void> _loadAndCleanPhotos() async {
     final prefs = await SharedPreferences.getInstance();
     final String? photosJson = prefs.getString('saved_photos');
@@ -261,7 +296,6 @@ class _MapScreenState extends State<MapScreen> {
       List<dynamic> decoded = json.decode(photosJson);
       List<Map<String, dynamic>> loadedPhotos = decoded.cast<Map<String, dynamic>>();
       
-      // AUTO-DESTRUCCIÓN FÍSICA A LOS 7 DÍAS
       loadedPhotos.removeWhere((f) {
         try {
           final date = DateTime.parse(f['timestamp']);
@@ -293,7 +327,7 @@ class _MapScreenState extends State<MapScreen> {
 
   Future<void> _takeForensicPhoto() async {
     final ImagePicker picker = ImagePicker();
-    final XFile? image = await picker.pickImage(source: ImageSource.camera, imageQuality: 80); // Reducido para procesar rápido
+    final XFile? image = await picker.pickImage(source: ImageSource.camera, imageQuality: 80); 
     
     if (image == null) return;
     
@@ -304,24 +338,20 @@ class _MapScreenState extends State<MapScreen> {
     final String lngStr = _center.longitude.toStringAsFixed(7);
     final String dateStr = DateFormat('dd/MM/yyyy HH:mm:ss').format(DateTime.now());
 
-    // EL QUEMADO DE PÍXELES (WATERMARK)
     try {
       final bytes = await imgFile.readAsBytes();
       img.Image? decodedImg = img.decodeImage(bytes);
       
       if (decodedImg != null) {
-        // Dibujar un rectángulo negro semitransparente como fondo del texto
         int rectHeight = 60;
         img.fillRect(decodedImg, 
             x1: 0, y1: decodedImg.height - rectHeight, 
             x2: decodedImg.width, y2: decodedImg.height, 
             color: img.ColorRgba8(0, 0, 0, 150));
         
-        // Estampar el texto blanco
         final String watermark = "INSPECCIÓN TÉCNICA | LAT: $latStr | LNG: $lngStr | $dateStr";
         img.drawString(decodedImg, watermark, font: img.arial_24, x: 20, y: decodedImg.height - 45, color: img.ColorRgb8(255, 255, 255));
         
-        // Sobrescribir el archivo original
         await imgFile.writeAsBytes(img.encodeJpg(decodedImg, quality: 90));
       }
     } catch (e) {
@@ -399,9 +429,8 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  // --- CONTROL DEL CAJÓN DE BÚSQUEDA ---
-  Future<void> _processSearch() async {
-    final query = _searchController.text;
+  Future<void> _processSearch({String? queryToProcess}) async {
+    final query = queryToProcess ?? _searchController.text;
     if (query.isEmpty) return;
 
     setState(() => _isLoadingSearch = true);
@@ -415,11 +444,10 @@ class _MapScreenState extends State<MapScreen> {
       _mapController.move(result, 16.0);
       setState(() => _center = result);
     } else {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No se pudo interpretar el dato.')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No se pudo interpretar el dato o URL.')));
     }
   }
 
-  // --- GESTIÓN DE INYECCIÓN Y ANTIFRAUDE ---
   Future<void> _toggleMock() async {
     if (_isMocking) {
       await _locationService.stopMocking();
@@ -431,7 +459,6 @@ class _MapScreenState extends State<MapScreen> {
         return;
       }
       
-      // CHEQUEOS ANTIFRAUDE
       if (_checkBounds) {
         final String? boundsWarning = ValidationService.checkSpainBounds(_center);
         if (boundsWarning != null && mounted) {
@@ -446,7 +473,6 @@ class _MapScreenState extends State<MapScreen> {
         }
       }
 
-      // EL BLINDAJE ABSOLUTO: 7 Decimales fijos al inyectar
       final String finalLatStr = _center.latitude.toStringAsFixed(7);
       final String finalLngStr = _center.longitude.toStringAsFixed(7);
 
@@ -520,7 +546,6 @@ class _MapScreenState extends State<MapScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // DISEÑO ADAPTATIVO: Detectamos si es móvil o Tablet (Galaxy Tab)
     return LayoutBuilder(
       builder: (context, constraints) {
         bool isTablet = constraints.maxWidth > 650;
@@ -548,7 +573,6 @@ class _MapScreenState extends State<MapScreen> {
                     : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                   userAgentPackageName: 'com.example.v4.inspector',
                 ),
-                // ANILLOS DE TOLERANCIA VISUALES (5m y 15m)
                 CircleLayer(
                   circles: [
                     CircleMarker(point: _center, radius: 15, useRadiusInMeter: true, color: Colors.yellowAccent.withOpacity(0.2), borderColor: Colors.yellow, borderStrokeWidth: 1),
@@ -558,10 +582,8 @@ class _MapScreenState extends State<MapScreen> {
               ],
             ),
             
-            // MARCADOR CENTRAL
             Center(child: Icon(_isMocking ? Icons.gps_fixed : Icons.add_circle_outline, color: _isMocking ? Colors.green : Colors.red, size: 40)),
             
-            // CAJÓN INTELIGENTE SUPERIOR
             Positioned(
               top: 20, left: 15, right: 15,
               child: Container(
@@ -572,7 +594,7 @@ class _MapScreenState extends State<MapScreen> {
                     Expanded(
                       child: TextField(
                         controller: _searchController,
-                        decoration: const InputDecoration(hintText: 'Introduce Decimal, UTM, DMS o Dirección...', border: InputBorder.none),
+                        decoration: const InputDecoration(hintText: 'Pega enlace de Maps, UTM, DMS o Decimales...', border: InputBorder.none),
                         onSubmitted: (_) => _processSearch(),
                       ),
                     ),
@@ -593,7 +615,6 @@ class _MapScreenState extends State<MapScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // CABECERA DEL PANEL
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 color: Colors.blueGrey[900],
@@ -612,7 +633,6 @@ class _MapScreenState extends State<MapScreen> {
                 ),
               ),
               
-              // SECCIÓN COORDENADAS Y CRUCETA
               Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: Row(
@@ -631,7 +651,6 @@ class _MapScreenState extends State<MapScreen> {
                         ],
                       ),
                     ),
-                    // CRUCETA DE FRANCOTIRADOR (D-PAD)
                     if (!_isMocking)
                       Column(
                         children: [
@@ -652,7 +671,6 @@ class _MapScreenState extends State<MapScreen> {
               
               const Divider(height: 1),
               
-              // SECCIÓN HERRAMIENTAS RÁPIDAS
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
                 child: Row(
@@ -679,7 +697,6 @@ class _MapScreenState extends State<MapScreen> {
                 ),
               ),
 
-              // GATILLO DE INYECCIÓN
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
                 child: SrunElevatedButton(
@@ -701,14 +718,12 @@ class _MapScreenState extends State<MapScreen> {
 
         return Scaffold(
           body: isTablet 
-            // VISTA GALAXY TAB A9+ (Mapa a la izquierda, Panel a la derecha)
             ? Row(
                 children: [
                   Expanded(child: mapArea),
                   controlPanel,
                 ],
               )
-            // VISTA MÓVIL NORMAL (Mapa arriba, Panel abajo)
             : Column(
                 children: [
                   Expanded(child: mapArea),
@@ -721,7 +736,6 @@ class _MapScreenState extends State<MapScreen> {
   }
 }
 
-// Widget auxiliar para cumplir con la expansión total del código
 class SrunElevatedButton extends StatelessWidget {
   final VoidCallback onPressed;
   final Widget child;
