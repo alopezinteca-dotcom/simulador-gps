@@ -269,10 +269,12 @@ workflows:
                               mockLocation.bearingAccuracyDegrees = 1.0f
                           }
                           
-                          // CORRECCIÓN DEL COMPILADOR: Llamada explícita a la función setter
-                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
+                          // LA MAGIA: Matriz de compatibilidad perfecta para el objeto base
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                              mockLocation.isMock = true
+                          } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
                               @Suppress("DEPRECATION")
-                              mockLocation.setIsFromMockProvider(true)
+                              mockLocation.isFromMockProvider = true
                           }
 
                           mockLocation.extras = Bundle().apply { 
@@ -292,10 +294,12 @@ workflows:
                                   loc.speed = 0.0f
                                   loc.bearing = 0.0f
 
-                                  // CORRECCIÓN DEL COMPILADOR: Llamada explícita al setter en los clones
-                                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
+                                  // LA MAGIA: Matriz de compatibilidad perfecta para cada clon
+                                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                      loc.isMock = true
+                                  } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
                                       @Suppress("DEPRECATION")
-                                      loc.setIsFromMockProvider(true)
+                                      loc.isFromMockProvider = true
                                   }
                                   
                                   locationManager?.setTestProviderLocation(p, loc)
