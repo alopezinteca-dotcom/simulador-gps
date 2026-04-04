@@ -25,7 +25,6 @@ workflows:
               <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
               <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
               <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
-              <uses-permission android:name="android.permission.ACCESS_MOCK_LOCATION" />
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.WAKE_LOCK" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -224,7 +223,7 @@ workflows:
 
               override fun onCreate() {
                   super.onCreate()
-                  // CIRUGÍA: Solo instanciamos FusedLocation, adiós al LocationManager antiguo
+                  // Solo inicializamos FusedLocation. Adiós LocationManager.
                   fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
               }
 
@@ -236,7 +235,7 @@ workflows:
                   
                   val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
                   wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "InspectorPro::WakeLock")
-                  wakeLock?.acquire(10 * 60 * 1000L) 
+                  wakeLock?.acquire(10 * 60 * 1000L) // Seguro anti-bloqueos: 10 minutos máximo
                   
                   val channelId = "inspector_v4_channel"
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -246,17 +245,17 @@ workflows:
                   
                   val notification = NotificationCompat.Builder(this, channelId)
                       .setContentTitle("INSPECTOR PRO 3 Activo")
-                      .setContentText("Simulación FusedLocation en proceso...")
+                      .setContentText("Evasión sensorial y jitter activados...")
                       .setSmallIcon(android.R.drawable.ic_menu_mylocation)
                       .build()
                   
                   startForeground(1, notification)
                   
-                  // CIRUGÍA: Activamos modo Mock única y exclusivamente en FusedLocation
                   try { fusedLocationClient.setMockMode(true) } catch (e: Exception) { Log.e("MockLocationService", "Error mockMode", e) }
 
                   mockRunnable = object : Runnable {
                       override fun run() {
+                          // Evasión térmica y de movimiento (Jitter)
                           val jitterLat = (random.nextDouble() - 0.5) * 0.000010
                           val jitterLng = (random.nextDouble() - 0.5) * 0.000010
                           val exactLat = BigDecimal(baseLat + jitterLat).setScale(7, RoundingMode.HALF_UP).toDouble()
@@ -282,7 +281,7 @@ workflows:
                               mockLocation.bearingAccuracyDegrees = 1.0f
                           }
 
-                          // CIRUGÍA: Inyectamos SOLO en FusedLocation. Google Maps leerá esto directamente.
+                          // Inyección puramente en FusedLocation
                           try {
                               fusedLocationClient.setMockLocation(mockLocation)
                           } catch (e: Exception) { Log.e("MockLocationService", "Error inyectando fused", e) }
@@ -299,7 +298,7 @@ workflows:
               override fun onDestroy() {
                   mockRunnable?.let { mockHandler.removeCallbacks(it) }
                   
-                  // CIRUGÍA: Limpieza profunda de caché de Google para evitar secuestros de GPS
+                  // Limpieza nuclear de la caché de Google Maps al apagar
                   try { 
                       fusedLocationClient.flushLocations()
                       fusedLocationClient.setMockMode(false) 
@@ -321,6 +320,7 @@ workflows:
               <issue id="MockLocation" severity="ignore" />
           </lint>
           EOF
+          # LA CLAVE DEL EXITO: Compilar en RELEASE para que Android lo respete
           flutter build apk --release
     artifacts:
       - build/app/outputs/flutter-apk/app-release.apk
