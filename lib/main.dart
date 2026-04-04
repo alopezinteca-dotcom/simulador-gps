@@ -12,11 +12,10 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:geolocator/geolocator.dart'; // Para leer tu ubicación física real
+import 'package:geolocator/geolocator.dart'; 
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  // MAGIA 1: Modo inmersivo para ocultar las barras del sistema de la Tablet
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
   runApp(const InspectorProApp());
 }
@@ -127,7 +126,98 @@ class ValidationService {
 }
 
 /// ============================================================================
-/// MÓDULO 3: LA PANTALLA PRINCIPAL (MAPA 100% PANTALLA COMPLETA)
+/// MÓDULO 3: CEREBRO DE CONVERSIÓN Y EXTRACCIÓN DE DIRECCIONES
+/// ============================================================================
+class CoordinateConverter {
+  static LatLng? parseInput(String input) {
+    String clean = input.trim().toUpperCase();
+    if (clean.isEmpty) return null;
+
+    try {
+      if (clean.contains('.') || clean.contains(',')) {
+        String numClean = clean.replaceAll('º', '').replaceAll('°', '').replaceAll(' ', '');
+        List<String> parts = numClean.split(RegExp(r'[,|;]'));
+        if (parts.length >= 2) {
+          double lat = double.parse(parts[0]);
+          double lng = double.parse(parts[1]);
+          return LatLng(double.parse(lat.toStringAsFixed(7)), double.parse(lng.toStringAsFixed(7)));
+        }
+      }
+    } catch (_) {}
+
+    try {
+      List<String> parts = clean.split(RegExp(r'\s+'));
+      if (parts.length >= 3) {
+        String zoneStr = parts[0];
+        int zoneNum = int.parse(zoneStr.replaceAll(RegExp(r'[A-Z]'), ''));
+        String zoneLetter = zoneStr.replaceAll(RegExp(r'[0-9]'), '');
+        double easting = double.parse(parts[1]);
+        double northing = double.parse(parts[2]);
+        final latlon = UTM.fromUtm(easting: easting, northing: northing, zoneNumber: zoneNum, zoneLetter: zoneLetter);
+        return LatLng(double.parse(latlon.lat.toStringAsFixed(7)), double.parse(latlon.lon.toStringAsFixed(7)));
+      }
+    } catch (_) {}
+
+    return null; 
+  }
+}
+
+class GeocodingService {
+  Future<LatLng?> searchAddress(String query) async {
+    final LatLng? parsed = CoordinateConverter.parseInput(query);
+    if (parsed != null) return parsed;
+
+    final urlMatch = RegExp(r'(https?://[^\s]+)').firstMatch(query);
+    if (urlMatch != null) {
+      String url = urlMatch.group(0)!;
+      try {
+        final getRes = await http.get(Uri.parse(url));
+        String finalUrl = getRes.request?.url.toString() ?? url;
+
+        final atMatch = RegExp(r'@(-?\d+\.\d+),(-?\d+\.\d+)').firstMatch(finalUrl);
+        if (atMatch != null) {
+          double lat = double.parse(atMatch.group(1)!);
+          double lng = double.parse(atMatch.group(2)!);
+          return LatLng(double.parse(lat.toStringAsFixed(7)), double.parse(lng.toStringAsFixed(7)));
+        }
+        
+        final dMatch = RegExp(r'!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)').firstMatch(finalUrl);
+        if (dMatch != null) {
+          double lat = double.parse(dMatch.group(1)!);
+          double lng = double.parse(dMatch.group(2)!);
+          return LatLng(double.parse(lat.toStringAsFixed(7)), double.parse(lng.toStringAsFixed(7)));
+        }
+
+        final qMatch = RegExp(r'q=(-?\d+\.\d+),(-?\d+\.\d+)').firstMatch(finalUrl);
+        if (qMatch != null) {
+          double lat = double.parse(qMatch.group(1)!);
+          double lng = double.parse(qMatch.group(2)!);
+          return LatLng(double.parse(lat.toStringAsFixed(7)), double.parse(lng.toStringAsFixed(7)));
+        }
+      } catch (e) {
+        debugPrint("Error resolviendo URL Maps: $e");
+      }
+    }
+
+    final Uri nominatimUrl = Uri.parse('https://nominatim.openstreetmap.org/search?q=${Uri.encodeComponent(query)}&format=json&limit=1');
+    try {
+      final response = await http.get(nominatimUrl, headers: {'User-Agent': 'InspectorPro3'});
+      if (response.statusCode == 200) {
+        final List<dynamic> data = json.decode(response.body);
+        if (data.isNotEmpty) {
+          final double lat = double.parse(data[0]['lat'].toString());
+          final double lon = double.parse(data[0]['lon'].toString());
+          return LatLng(double.parse(lat.toStringAsFixed(7)), double.parse(lon.toStringAsFixed(7)));
+        }
+      }
+    } catch (e) {}
+    
+    return null;
+  }
+}
+
+/// ============================================================================
+/// MÓDULO 4: LA PANTALLA PRINCIPAL
 /// ============================================================================
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -139,6 +229,7 @@ class MapScreen extends StatefulWidget {
 class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   final MapController _mapController = MapController();
   final LocationService _locationService = LocationService();
+  final GeocodingService _geocodingService = GeocodingService();
   final SystemSettingsService _systemSettingsService = SystemSettingsService();
   
   LatLng _center = const LatLng(36.7213000, -4.4214000); 
@@ -174,7 +265,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     }
   }
 
-  // --- ESCÁNER DE ENLACES DE GOOGLE MAPS ---
   Future<void> _checkSharedLinks() async {
     final String? sharedText = await _locationService.getSharedText();
     if (sharedText != null && sharedText.isNotEmpty) {
@@ -198,6 +288,12 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
         } catch (e) {
           debugPrint("Error resolviendo URL: $e");
         }
+      } else {
+        // Si mandan texto normal que no sea URL, usamos el servicio de Geocoding
+        final LatLng? result = await _geocodingService.searchAddress(sharedText);
+        if (result != null) {
+          _updateMapCenterFromExtracted(result.latitude.toString(), result.longitude.toString());
+        }
       }
     }
   }
@@ -209,7 +305,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       _center = LatLng(double.parse(lat.toStringAsFixed(7)), double.parse(lng.toStringAsFixed(7)));
       _mapController.move(_center, 17.0);
     });
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Coordenada importada de Google Maps.'), backgroundColor: Colors.green));
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ubicación capturada con éxito.'), backgroundColor: Colors.green));
   }
 
   Future<void> _requestPermissions() async {
@@ -220,7 +316,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     ].request();
   }
 
-  // --- BOTÓN UBICACIÓN REAL FÍSICA ---
+  // BUG CORREGIDO: GPS Real blindado con temporizador y fallback
   Future<void> _goToRealLocation() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
@@ -238,12 +334,30 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     }
 
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Buscando señal real...')));
-    Position position = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
     
-    setState(() {
-      _center = LatLng(double.parse(position.latitude.toStringAsFixed(7)), double.parse(position.longitude.toStringAsFixed(7)));
-      _mapController.move(_center, 17.0);
-    });
+    try {
+      Position position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 5), // Límite de 5 segundos
+      );
+      
+      setState(() {
+        _center = LatLng(double.parse(position.latitude.toStringAsFixed(7)), double.parse(position.longitude.toStringAsFixed(7)));
+        _mapController.move(_center, 17.0);
+      });
+    } catch (e) {
+      // Fallback: Si no consigue señal nueva en 5s, usa la última conocida
+      Position? lastPos = await Geolocator.getLastKnownPosition();
+      if (lastPos != null) {
+        setState(() {
+          _center = LatLng(double.parse(lastPos.latitude.toStringAsFixed(7)), double.parse(lastPos.longitude.toStringAsFixed(7)));
+          _mapController.move(_center, 17.0);
+        });
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Se usó la última ubicación conocida.')));
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No se pudo encontrar señal GPS.')));
+      }
+    }
   }
 
   void _microAdjust(double latOffset, double lngOffset) {
@@ -340,6 +454,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Evidencia Guardada.'), backgroundColor: Colors.green));
   }
 
+  // BUG CORREGIDO: Mover al mapa al tocar una foto ahora tiene un micro-retraso
   void _showPhotoGallery() {
     showModalBottomSheet(
       context: context,
@@ -374,10 +489,13 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                 },
               ),
               onTap: () {
-                Navigator.pop(context);
-                final newPos = LatLng(f['lat'], f['lng']);
-                _mapController.move(newPos, 16.0);
-                setState(() => _center = newPos);
+                Navigator.pop(context); // Cierra el cajón primero
+                // El retraso de 300ms permite que el mapa reciba la orden correctamente
+                Future.delayed(const Duration(milliseconds: 300), () {
+                  final newPos = LatLng(double.parse(f['lat'].toString()), double.parse(f['lng'].toString()));
+                  _mapController.move(newPos, 17.0);
+                  setState(() => _center = newPos);
+                });
               },
             );
           },
@@ -386,7 +504,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     );
   }
 
-  // --- DIÁLOGO PLANTILLA DE COORDENADAS ---
+  // --- DIÁLOGO PLANTILLA DE COORDENADAS CON BUSCADOR AÑADIDO ---
   void _showCoordinateInputDialog() {
     final TextEditingController decLatCtrl = TextEditingController();
     final TextEditingController decLngCtrl = TextEditingController();
@@ -394,25 +512,28 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     final TextEditingController utmZoneCtrl = TextEditingController();
     final TextEditingController utmEastCtrl = TextEditingController();
     final TextEditingController utmNorthCtrl = TextEditingController();
+    
+    final TextEditingController addressCtrl = TextEditingController();
 
     showDialog(
       context: context,
       builder: (context) {
         return DefaultTabController(
-          length: 3,
+          length: 4, // 4 pestañas ahora
           child: Dialog(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             child: Container(
               padding: const EdgeInsets.all(16),
-              height: 400,
+              height: 450,
               child: Column(
                 children: [
-                  const Text("🎯 PLANTILLA DE COORDENADAS", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  const Text("🎯 LOCALIZAR UBICACIÓN", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                   const SizedBox(height: 10),
                   const TabBar(
                     labelColor: Colors.blue,
                     unselectedLabelColor: Colors.grey,
-                    tabs: [Tab(text: "Decimal"), Tab(text: "UTM"), Tab(text: "DMS")]
+                    isScrollable: true,
+                    tabs: [Tab(text: "Decimal"), Tab(text: "UTM"), Tab(text: "DMS"), Tab(text: "Dirección / Link")]
                   ),
                   Expanded(
                     child: TabBarView(
@@ -435,8 +556,21 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                             TextField(controller: utmNorthCtrl, decoration: const InputDecoration(labelText: 'Northing (Y)'), keyboardType: const TextInputType.numberWithOptions(decimal: true)),
                           ],
                         ),
-                        // PESTAÑA DMS (Simulada para mantener el código claro, pide decimal directo en el campo de momento)
-                        const Center(child: Text("Para DMS, use el formato Decimal o la importación compartida de Google Maps.", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey))),
+                        // PESTAÑA DMS 
+                        const Center(child: Text("Utilice el formato Decimal o busque la Dirección directamente.", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey))),
+                        // PESTAÑA DIRECCIÓN (EL BUSCADOR QUE QUERÍAS)
+                        Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Text("Escribe una calle o pega un link de Maps:", style: TextStyle(fontSize: 12, color: Colors.grey)),
+                            const SizedBox(height: 10),
+                            TextField(
+                              controller: addressCtrl, 
+                              decoration: const InputDecoration(hintText: 'Ej: Gran Via, Madrid', border: OutlineInputBorder()), 
+                              maxLines: 2,
+                            ),
+                          ],
+                        ),
                       ],
                     ),
                   ),
@@ -444,21 +578,29 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                     width: double.infinity,
                     child: ElevatedButton(
                       style: ElevatedButton.styleFrom(backgroundColor: Colors.blueGrey[900], foregroundColor: Colors.white),
-                      onPressed: () {
+                      onPressed: () async {
                         LatLng? parsed;
-                        try {
-                          // Evaluar qué controlador tiene texto
-                          if (decLatCtrl.text.isNotEmpty && decLngCtrl.text.isNotEmpty) {
+                        
+                        // 1. Comprobar si hay búsqueda por dirección o link
+                        if (addressCtrl.text.isNotEmpty) {
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Buscando...')));
+                          parsed = await _geocodingService.searchAddress(addressCtrl.text);
+                        } 
+                        // 2. Comprobar Decimales
+                        else if (decLatCtrl.text.isNotEmpty && decLngCtrl.text.isNotEmpty) {
+                          try {
                             parsed = LatLng(double.parse(decLatCtrl.text.replaceAll(',', '.')), double.parse(decLngCtrl.text.replaceAll(',', '.')));
-                          } else if (utmZoneCtrl.text.isNotEmpty && utmEastCtrl.text.isNotEmpty && utmNorthCtrl.text.isNotEmpty) {
+                          } catch (_) {}
+                        } 
+                        // 3. Comprobar UTM
+                        else if (utmZoneCtrl.text.isNotEmpty && utmEastCtrl.text.isNotEmpty && utmNorthCtrl.text.isNotEmpty) {
+                          try {
                             String zone = utmZoneCtrl.text.trim().toUpperCase();
                             int zNum = int.parse(zone.replaceAll(RegExp(r'[A-Z]'), ''));
                             String zLet = zone.replaceAll(RegExp(r'[0-9]'), '');
                             final latlon = UTM.fromUtm(easting: double.parse(utmEastCtrl.text), northing: double.parse(utmNorthCtrl.text), zoneNumber: zNum, zoneLetter: zLet);
                             parsed = LatLng(latlon.lat, latlon.lon);
-                          }
-                        } catch (e) {
-                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Formato inválido. Revisa los números.')));
+                          } catch (_) {}
                         }
 
                         if (parsed != null) {
@@ -467,6 +609,8 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                             _mapController.move(_center, 17.0);
                           });
                           Navigator.pop(context);
+                        } else {
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No se pudo encontrar la ubicación.')));
                         }
                       },
                       child: const Text("ENVIAR AL MAPA"),
@@ -516,7 +660,8 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
           _lastInjectedTime = DateTime.now();
         });
       } else {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Fallo en inyección: $result (Verifica Opciones Desarrollador)'), backgroundColor: Colors.red));
+        // BUG CORREGIDO: Aviso explícito si no eres app de simulación en desarrollador
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: Configura la app como "Aplicación de ubicación simulada" en Opciones de Desarrollador'), backgroundColor: Colors.red, duration: const Duration(seconds: 4)));
       }
     }
   }
@@ -570,7 +715,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // SE ELIMINA EL SPLIT SCREEN (ROW). AHORA ES UN STACK 100% COMPLETO.
       body: Stack(
         children: [
           // 1. EL MAPA (FONDO COMPLETO)
@@ -658,7 +802,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: Container(
-                  width: 500, // En tablets no ocupará toda la pantalla de ancho, en móviles sí.
+                  width: 500,
                   decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 10, spreadRadius: 2)]),
                   child: Padding(
                     padding: const EdgeInsets.all(16.0),
