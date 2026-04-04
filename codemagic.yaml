@@ -57,7 +57,7 @@ workflows:
                       <intent-filter>
                           <action android:name="android.intent.action.SEND" />
                           <category android:name="android.intent.category.DEFAULT" />
-                          <data android:mimeType="text/plain" />
+                          <data android:mimeType="text/*" />
                       </intent-filter>
                   </activity>
                   
@@ -99,13 +99,16 @@ workflows:
 
               override fun onNewIntent(intent: Intent) {
                   super.onNewIntent(intent)
-                  setIntent(intent) // ESTO ES VITAL PARA CAZAR EL ENLACE CON LA APP ABIERTA
+                  intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP) // MEJORA: Refuerzo de estabilidad
+                  setIntent(intent) 
                   handleIntent(intent)
               }
 
               private fun handleIntent(intent: Intent) {
-                  if (Intent.ACTION_SEND == intent.action && "text/plain" == intent.type) {
-                      sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
+                  if (Intent.ACTION_SEND == intent.action && intent.type != null) {
+                      if (intent.type!!.startsWith("text/")) { // Atrapa text/plain, text/uri-list, etc.
+                          sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
+                      }
                   }
               }
 
@@ -234,8 +237,9 @@ workflows:
                   val lngStr = intent?.getStringExtra("lngStr") ?: "0.0"
                   
                   val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+                  // MEJORA: WakeLock sin límite de tiempo para que no se apague a los 10 mins
                   wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "InspectorPro::WakeLock")
-                  wakeLock?.acquire(10 * 60 * 1000L) 
+                  wakeLock?.acquire() 
                   
                   val channelId = "inspector_v4_channel"
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -313,7 +317,8 @@ workflows:
                               fusedLocationClient.flushLocations()
                           } catch (e: Exception) {}
 
-                          mockHandler.postDelayed(this, 500)
+                          // MEJORA: 1000ms en lugar de 500ms (Ahorro batería y estabilidad)
+                          mockHandler.postDelayed(this, 1000)
                       }
                   }
                   mockHandler.post(mockRunnable!!)
