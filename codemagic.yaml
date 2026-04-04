@@ -216,22 +216,15 @@ workflows:
           import java.util.Random
 
           class MockLocationService : Service() {
-              private var locationManager: LocationManager? = null
               private lateinit var fusedLocationClient: FusedLocationProviderClient
               private var mockHandler = Handler(Looper.getMainLooper())
               private var mockRunnable: Runnable? = null
               private var wakeLock: PowerManager.WakeLock? = null
               private val random = Random()
-              
-              private val providers = arrayOf(
-                  LocationManager.GPS_PROVIDER, 
-                  LocationManager.NETWORK_PROVIDER,
-                  LocationManager.PASSIVE_PROVIDER
-              )
 
               override fun onCreate() {
                   super.onCreate()
-                  locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+                  // CIRUGÍA: Solo instanciamos FusedLocation, adiós al LocationManager antiguo
                   fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
               }
 
@@ -253,23 +246,13 @@ workflows:
                   
                   val notification = NotificationCompat.Builder(this, channelId)
                       .setContentTitle("INSPECTOR PRO 3 Activo")
-                      .setContentText("Evasión sensorial y jitter activados...")
+                      .setContentText("Simulación FusedLocation en proceso...")
                       .setSmallIcon(android.R.drawable.ic_menu_mylocation)
                       .build()
                   
                   startForeground(1, notification)
                   
-                  for (provider in providers) {
-                      try { locationManager?.removeTestProvider(provider) } catch (e: Exception) { Log.e("MockLocationService", "Error removiendo", e) }
-                  }
-
-                  for (provider in providers) {
-                      try {
-                          locationManager?.addTestProvider(provider, false, false, false, false, true, true, true, 0, 5)
-                          locationManager?.setTestProviderEnabled(provider, true)
-                      } catch (e: Exception) { Log.e("MockLocationService", "Error añadiendo", e) }
-                  }
-                  
+                  // CIRUGÍA: Activamos modo Mock única y exclusivamente en FusedLocation
                   try { fusedLocationClient.setMockMode(true) } catch (e: Exception) { Log.e("MockLocationService", "Error mockMode", e) }
 
                   mockRunnable = object : Runnable {
@@ -281,11 +264,9 @@ workflows:
 
                           val mockLocation = Location(LocationManager.GPS_PROVIDER)
                           
-                          mockLocation.provider = LocationManager.GPS_PROVIDER
                           mockLocation.latitude = exactLat
                           mockLocation.longitude = exactLng
                           mockLocation.altitude = 10.0
-                          
                           mockLocation.speed = 0.1f + random.nextFloat() * 0.4f
                           mockLocation.bearing = random.nextFloat() * 360f
                           
@@ -301,23 +282,9 @@ workflows:
                               mockLocation.bearingAccuracyDegrees = 1.0f
                           }
 
-                          for (p in providers) {
-                              try {
-                                  val loc = Location(mockLocation)
-                                  loc.provider = p
-                                  loc.time = System.currentTimeMillis()
-                                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
-                                      loc.elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
-                                  }
-                                  
-                                  locationManager?.setTestProviderLocation(p, loc)
-                              } catch (e: Exception) { Log.e("MockLocationService", "Error inyectando provider", e) }
-                          }
-                          
+                          // CIRUGÍA: Inyectamos SOLO en FusedLocation. Google Maps leerá esto directamente.
                           try {
-                              fusedLocationClient.setMockMode(true)
                               fusedLocationClient.setMockLocation(mockLocation)
-                              fusedLocationClient.flushLocations()
                           } catch (e: Exception) { Log.e("MockLocationService", "Error inyectando fused", e) }
 
                           val delay = 800L + random.nextInt(400).toLong()
@@ -332,13 +299,11 @@ workflows:
               override fun onDestroy() {
                   mockRunnable?.let { mockHandler.removeCallbacks(it) }
                   
-                  // LIMPIEZA NUCLEAR PARA QUE EL GPS NO SE QUEDE SECUESTRADO
-                  try { fusedLocationClient.setMockMode(false) } catch (e: Exception) { Log.e("MockLocationService", "Error destroy mockMode", e) }
-                  for (provider in providers) {
-                      try { 
-                          locationManager?.removeTestProvider(provider) 
-                      } catch (e: Exception) { Log.e("MockLocationService", "Error destroy remove", e) }
-                  }
+                  // CIRUGÍA: Limpieza profunda de caché de Google para evitar secuestros de GPS
+                  try { 
+                      fusedLocationClient.flushLocations()
+                      fusedLocationClient.setMockMode(false) 
+                  } catch (e: Exception) { Log.e("MockLocationService", "Error destroy mockMode", e) }
                   
                   if (wakeLock?.isHeld == true) { wakeLock?.release() }
                   super.onDestroy()
@@ -356,6 +321,6 @@ workflows:
               <issue id="MockLocation" severity="ignore" />
           </lint>
           EOF
-          flutter build apk --debug
+          flutter build apk --release
     artifacts:
-      - build/app/outputs/flutter-apk/app-debug.apk
+      - build/app/outputs/flutter-apk/app-release.apk
