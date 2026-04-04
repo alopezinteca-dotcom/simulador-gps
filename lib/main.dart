@@ -170,13 +170,22 @@ class GeocodingService {
 
     final urlMatch = RegExp(r'(https?://[^\s]+)').firstMatch(query);
     if (urlMatch != null) {
-      String url = urlMatch.group(0)!;
+      String finalUrl = urlMatch.group(0)!;
       try {
-        final getRes = await http.get(
-          Uri.parse(url),
-          headers: {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-        );
-        String finalUrl = getRes.request?.url.toString() ?? url;
+        // PARCHE EU: Leer redirecciones manualmente para saltar el Muro de Cookies de Google
+        int redirects = 0;
+        while (redirects < 3) {
+          final request = http.Request('GET', Uri.parse(finalUrl))..followRedirects = false;
+          final response = await http.Client().send(request);
+          if (response.statusCode >= 300 && response.statusCode < 400) {
+            finalUrl = response.headers['location'] ?? finalUrl;
+            redirects++;
+          } else {
+            break;
+          }
+        }
+        
+        finalUrl = Uri.decodeFull(finalUrl); // Convertir %2C a comas
 
         final atMatch = RegExp(r'@(-?\d+\.\d+),(-?\d+\.\d+)').firstMatch(finalUrl);
         if (atMatch != null) {
@@ -593,6 +602,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 
                         if (parsed != null) {
                           setState(() {
+                            // BLINDAJE DECIMAL AL IMPORTAR
                             _center = LatLng(double.parse(parsed!.latitude.toStringAsFixed(7)), double.parse(parsed.longitude.toStringAsFixed(7)));
                             _mapController.move(_center, 17.0);
                           });
@@ -710,7 +720,11 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
               initialCenter: _center,
               initialZoom: 17.0,
               onPositionChanged: (pos, hasGesture) {
-                if (pos.center != null && !_isMocking) setState(() => _center = pos.center!);
+                // PARCHE DEL LÁDRON DE DECIMALES: 
+                // Solo se actualiza la coordenada visual si arrastras el mapa (hasGesture == true).
+                if (pos.center != null && !_isMocking && hasGesture) {
+                  setState(() => _center = pos.center!);
+                }
               },
               interactionOptions: InteractionOptions(flags: _isMocking ? InteractiveFlag.none : InteractiveFlag.all)
             ),
