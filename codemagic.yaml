@@ -25,6 +25,7 @@ workflows:
               <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
               <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
               <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+              <uses-permission android:name="android.permission.ACCESS_MOCK_LOCATION" />
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.WAKE_LOCK" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -242,7 +243,7 @@ workflows:
                   
                   val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
                   wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "InspectorPro::WakeLock")
-                  wakeLock?.acquire(10 * 60 * 1000L) // LIMITE DE 10 MINUTOS RESTAURADO PARA PROTECCIÓN
+                  wakeLock?.acquire(10 * 60 * 1000L) 
                   
                   val channelId = "inspector_v4_channel"
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -273,7 +274,6 @@ workflows:
 
                   mockRunnable = object : Runnable {
                       override fun run() {
-                          // EVASIÓN: Micro-movimientos matemáticos (Ruido en el 6º/7º decimal)
                           val jitterLat = (random.nextDouble() - 0.5) * 0.000010
                           val jitterLng = (random.nextDouble() - 0.5) * 0.000010
                           val exactLat = BigDecimal(baseLat + jitterLat).setScale(7, RoundingMode.HALF_UP).toDouble()
@@ -286,7 +286,6 @@ workflows:
                           mockLocation.longitude = exactLng
                           mockLocation.altitude = 10.0
                           
-                          // EVASIÓN: Velocidad y rumbo orgánicos en lugar de 0.0
                           mockLocation.speed = 0.1f + random.nextFloat() * 0.4f
                           mockLocation.bearing = random.nextFloat() * 360f
                           
@@ -301,8 +300,6 @@ workflows:
                               mockLocation.speedAccuracyMetersPerSecond = 0.1f
                               mockLocation.bearingAccuracyDegrees = 1.0f
                           }
-
-                          // ELIMINADO EL BUNDLE DE EXTRAS PARA NO DEJAR RASTRO
 
                           for (p in providers) {
                               try {
@@ -323,7 +320,6 @@ workflows:
                               fusedLocationClient.flushLocations()
                           } catch (e: Exception) { Log.e("MockLocationService", "Error inyectando fused", e) }
 
-                          // EVASIÓN: Jitter temporal (Latido entre 800ms y 1200ms)
                           val delay = 800L + random.nextInt(400).toLong()
                           mockHandler.postDelayed(this, delay)
                       }
@@ -335,10 +331,15 @@ workflows:
 
               override fun onDestroy() {
                   mockRunnable?.let { mockHandler.removeCallbacks(it) }
-                  for (provider in providers) {
-                      try { locationManager?.removeTestProvider(provider) } catch (e: Exception) { Log.e("MockLocationService", "Error destroy remove", e) }
-                  }
+                  
+                  // LIMPIEZA NUCLEAR PARA QUE EL GPS NO SE QUEDE SECUESTRADO
                   try { fusedLocationClient.setMockMode(false) } catch (e: Exception) { Log.e("MockLocationService", "Error destroy mockMode", e) }
+                  for (provider in providers) {
+                      try { 
+                          locationManager?.removeTestProvider(provider) 
+                      } catch (e: Exception) { Log.e("MockLocationService", "Error destroy remove", e) }
+                  }
+                  
                   if (wakeLock?.isHeld == true) { wakeLock?.release() }
                   super.onDestroy()
               }
