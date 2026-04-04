@@ -32,6 +32,7 @@ workflows:
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
               <uses-permission android:name="android.permission.CAMERA" />
+              
               <application
                   android:label="INSPECTOR PRO 3"
                   android:name="${applicationName}"
@@ -98,6 +99,7 @@ workflows:
 
               override fun onNewIntent(intent: Intent) {
                   super.onNewIntent(intent)
+                  setIntent(intent) // ESTO ES VITAL PARA CAZAR EL ENLACE CON LA APP ABIERTA
                   handleIntent(intent)
               }
 
@@ -122,7 +124,7 @@ workflows:
                               
                               if (latStr != null && lngStr != null) {
                                   if (!isMockAppSelected()) {
-                                      result.error("PERMISSION_DENIED", "La app no esta seleccionada", null)
+                                      result.error("PERMISSION_DENIED", "La app no esta seleccionada en Opciones de Desarrollador", null)
                                       return@setMethodCallHandler
                                   }
 
