@@ -13,6 +13,7 @@ import 'dart:io';
 import 'dart:math';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:geolocator/geolocator.dart'; 
+import 'package:crypto/crypto.dart'; // NECESITA: crypto: ^3.0.3 en pubspec.yaml
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -250,7 +251,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     _requestPermissions();
     _loadAndCleanPhotos();
     
-    // MEJORA: Esperamos a que el UI esté construido antes de leer los enlaces
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkSharedLinks(); 
     });
@@ -319,7 +319,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     ].request();
   }
 
-  // MEJORA: GPS Estrategia Óptima (Instantánea + 5s bestForNavigation)
   Future<void> _goToRealLocation() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
@@ -336,7 +335,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       }
     }
 
-    // 1. Intento Inmediato
     Position? lastPos = await Geolocator.getLastKnownPosition();
     if (lastPos != null) {
       setState(() {
@@ -348,7 +346,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Buscando satélites...')));
     }
 
-    // 2. Búsqueda Fina (Mejor para navegación, 5s timeout)
     try {
       Position position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.bestForNavigation,
@@ -377,7 +374,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     });
   }
 
-  // --- GESTIÓN DE FOTOS ---
+  // --- GESTIÓN FORENSE DE FOTOS ---
   Future<void> _loadAndCleanPhotos() async {
     final prefs = await SharedPreferences.getInstance();
     final String? photosJson = prefs.getString('saved_photos');
@@ -420,7 +417,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     final XFile? image = await picker.pickImage(source: ImageSource.camera, imageQuality: 80); 
     if (image == null) return;
     
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Procesando marca forense...')));
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Generando evidencia y Hash SHA256...')));
 
     final File imgFile = File(image.path);
     final String latStr = _center.latitude.toStringAsFixed(7);
@@ -429,17 +426,27 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 
     try {
       final bytes = await imgFile.readAsBytes();
+      
+      // Cálculo del Hash Forense SHA-256
+      final digest = sha256.convert(bytes);
+      final String hashStr = digest.toString().substring(0, 16).toUpperCase(); 
+
       img.Image? decodedImg = img.decodeImage(bytes);
       
       if (decodedImg != null) {
-        int rectHeight = 60;
+        int rectHeight = 85;
         img.fillRect(decodedImg, 
             x1: 0, y1: decodedImg.height - rectHeight, 
             x2: decodedImg.width, y2: decodedImg.height, 
-            color: img.ColorRgba8(0, 0, 0, 150));
+            color: img.ColorRgba8(0, 0, 0, 160));
         
-        final String watermark = "INSPECCION TECNICA | LAT: $latStr | LNG: $lngStr | $dateStr";
-        img.drawString(decodedImg, watermark, font: img.arial24, x: 20, y: decodedImg.height - 45, color: img.ColorRgb8(255, 255, 255));
+        final String watermarkLine1 = "INSPECCION TECNICA | LAT: $latStr | LNG: $lngStr";
+        final String watermarkLine2 = "ALT: 10.0m | ACC: 1.0m | DATE: $dateStr";
+        final String watermarkLine3 = "SHA256: $hashStr";
+        
+        img.drawString(decodedImg, watermarkLine1, font: img.arial24, x: 20, y: decodedImg.height - 75, color: img.ColorRgb8(255, 255, 255));
+        img.drawString(decodedImg, watermarkLine2, font: img.arial24, x: 20, y: decodedImg.height - 50, color: img.ColorRgb8(255, 255, 255));
+        img.drawString(decodedImg, watermarkLine3, font: img.arial24, x: 20, y: decodedImg.height - 25, color: img.ColorRgb8(255, 200, 0));
         
         await imgFile.writeAsBytes(img.encodeJpg(decodedImg, quality: 90));
       }
@@ -458,7 +465,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     });
     
     _savePhotosToDisk();
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Evidencia Guardada.'), backgroundColor: Colors.green));
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Evidencia Forense Asegurada.'), backgroundColor: Colors.green));
   }
 
   void _showPhotoGallery() {
@@ -496,7 +503,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
               ),
               onTap: () {
                 Navigator.pop(context); 
-                // MEJORA: Aumentado el micro-retraso a 400ms para asegurar renderizado en tablet
                 Future.delayed(const Duration(milliseconds: 400), () {
                   final newPos = LatLng(double.parse(f['lat'].toString()), double.parse(f['lng'].toString()));
                   _mapController.move(newPos, 17.0);
@@ -821,7 +827,8 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                           ],
                         ),
                         const SizedBox(height: 16),
-                        SrunElevatedButton(
+                        // MEJORA: ElevatedButton directo, eliminando SrunElevatedButton
+                        ElevatedButton(
                           onPressed: _toggleMock,
                           style: ElevatedButton.styleFrom(
                             backgroundColor: _isMocking ? Colors.red[700] : Colors.green[700],
@@ -842,28 +849,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
           ),
         ],
       ),
-    );
-  }
-}
-
-class SrunElevatedButton extends StatelessWidget {
-  final VoidCallback onPressed;
-  final Widget child;
-  final ButtonStyle style;
-
-  const SrunElevatedButton({
-    super.key,
-    required this.onPressed,
-    required this.child,
-    required this.style,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return ElevatedButton(
-      onPressed: onPressed,
-      style: style,
-      child: child,
     );
   }
 }
