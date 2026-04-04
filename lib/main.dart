@@ -13,7 +13,7 @@ import 'dart:io';
 import 'dart:math';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:geolocator/geolocator.dart'; 
-import 'package:crypto/crypto.dart'; // NECESITA: crypto: ^3.0.3 en pubspec.yaml
+import 'package:crypto/crypto.dart'; 
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -172,7 +172,11 @@ class GeocodingService {
     if (urlMatch != null) {
       String url = urlMatch.group(0)!;
       try {
-        final getRes = await http.get(Uri.parse(url));
+        // DISFRAZ DE GOOGLE CHROME PARA QUE MAPS NO NOS BLOQUEE LA URL
+        final getRes = await http.get(
+          Uri.parse(url),
+          headers: {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        );
         String finalUrl = getRes.request?.url.toString() ?? url;
 
         final atMatch = RegExp(r'@(-?\d+\.\d+),(-?\d+\.\d+)').firstMatch(finalUrl);
@@ -272,31 +276,13 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   Future<void> _checkSharedLinks() async {
     final String? sharedText = await _locationService.getSharedText();
     if (sharedText != null && sharedText.isNotEmpty) {
-      final urlMatch = RegExp(r'(https?://[^\s]+)').firstMatch(sharedText);
-      if (urlMatch != null) {
-        String url = urlMatch.group(0)!;
-        try {
-          final getRes = await http.get(Uri.parse(url));
-          String finalUrl = getRes.request?.url.toString() ?? url;
-
-          final atMatch = RegExp(r'@(-?\d+\.\d+),(-?\d+\.\d+)').firstMatch(finalUrl);
-          if (atMatch != null) {
-            _updateMapCenterFromExtracted(atMatch.group(1)!, atMatch.group(2)!);
-            return;
-          }
-          final dMatch = RegExp(r'!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)').firstMatch(finalUrl);
-          if (dMatch != null) {
-            _updateMapCenterFromExtracted(dMatch.group(1)!, dMatch.group(2)!);
-            return;
-          }
-        } catch (e) {
-          debugPrint("Error resolviendo URL: $e");
-        }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Procesando enlace compartido...')));
+      
+      final LatLng? result = await _geocodingService.searchAddress(sharedText);
+      if (result != null) {
+        _updateMapCenterFromExtracted(result.latitude.toString(), result.longitude.toString());
       } else {
-        final LatLng? result = await _geocodingService.searchAddress(sharedText);
-        if (result != null) {
-          _updateMapCenterFromExtracted(result.latitude.toString(), result.longitude.toString());
-        }
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No se pudo extraer la coordenada de Google Maps.'), backgroundColor: Colors.red));
       }
     }
   }
@@ -308,7 +294,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       _center = LatLng(double.parse(lat.toStringAsFixed(7)), double.parse(lng.toStringAsFixed(7)));
       _mapController.move(_center, 17.0);
     });
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ubicación capturada.'), backgroundColor: Colors.green));
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ubicación capturada con éxito.'), backgroundColor: Colors.green));
   }
 
   Future<void> _requestPermissions() async {
@@ -341,7 +327,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
         _center = LatLng(double.parse(lastPos.latitude.toStringAsFixed(7)), double.parse(lastPos.longitude.toStringAsFixed(7)));
         _mapController.move(_center, 17.0);
       });
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ubicación rápida obtenida. Afinando precisión...')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ubicación rápida obtenida. Afinando...')));
     } else {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Buscando satélites...')));
     }
@@ -349,7 +335,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     try {
       Position position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.bestForNavigation,
-        timeLimit: const Duration(seconds: 5), 
+        timeLimit: const Duration(seconds: 8), 
       );
       
       setState(() {
@@ -359,7 +345,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Precisión GPS máxima obtenida.')));
     } catch (e) {
       if (lastPos == null && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Señal débil en interiores.')));
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Señal débil. Asegúrate de no estar bajo un techo.')));
       }
     }
   }
@@ -427,7 +413,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     try {
       final bytes = await imgFile.readAsBytes();
       
-      // Cálculo del Hash Forense SHA-256
       final digest = sha256.convert(bytes);
       final String hashStr = digest.toString().substring(0, 16).toUpperCase(); 
 
@@ -663,7 +648,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
           _lastInjectedTime = DateTime.now();
         });
       } else {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: Configura la app como "Aplicación de ubicación simulada" en Opciones de Desarrollador'), backgroundColor: Colors.red, duration: const Duration(seconds: 4)));
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: Selecciona esta app en "Opciones de Desarrollador"'), backgroundColor: Colors.red, duration: const Duration(seconds: 4)));
       }
     }
   }
@@ -827,7 +812,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                           ],
                         ),
                         const SizedBox(height: 16),
-                        // MEJORA: ElevatedButton directo, eliminando SrunElevatedButton
                         ElevatedButton(
                           onPressed: _toggleMock,
                           style: ElevatedButton.styleFrom(
