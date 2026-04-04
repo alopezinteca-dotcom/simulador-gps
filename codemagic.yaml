@@ -25,7 +25,6 @@ workflows:
               <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
               <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
               <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
-              <uses-permission android:name="android.permission.ACCESS_MOCK_LOCATION" />
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.WAKE_LOCK" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -99,14 +98,14 @@ workflows:
 
               override fun onNewIntent(intent: Intent) {
                   super.onNewIntent(intent)
-                  intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP) // MEJORA: Refuerzo de estabilidad
+                  intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
                   setIntent(intent) 
                   handleIntent(intent)
               }
 
               private fun handleIntent(intent: Intent) {
                   if (Intent.ACTION_SEND == intent.action && intent.type != null) {
-                      if (intent.type!!.startsWith("text/")) { // Atrapa text/plain, text/uri-list, etc.
+                      if (intent.type!!.startsWith("text/")) { 
                           sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
                       }
                   }
@@ -207,11 +206,13 @@ workflows:
           import android.os.Looper
           import android.os.PowerManager
           import android.os.SystemClock
+          import android.util.Log
           import androidx.core.app.NotificationCompat
           import com.google.android.gms.location.FusedLocationProviderClient
           import com.google.android.gms.location.LocationServices
           import java.math.BigDecimal
           import java.math.RoundingMode
+          import java.util.Random
 
           class MockLocationService : Service() {
               private var locationManager: LocationManager? = null
@@ -219,6 +220,7 @@ workflows:
               private var mockHandler = Handler(Looper.getMainLooper())
               private var mockRunnable: Runnable? = null
               private var wakeLock: PowerManager.WakeLock? = null
+              private val random = Random()
               
               private val providers = arrayOf(
                   LocationManager.GPS_PROVIDER, 
@@ -233,13 +235,14 @@ workflows:
               }
 
               override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-                  val latStr = intent?.getStringExtra("latStr") ?: "0.0"
-                  val lngStr = intent?.getStringExtra("lngStr") ?: "0.0"
+                  val baseLatStr = intent?.getStringExtra("latStr") ?: "0.0"
+                  val baseLngStr = intent?.getStringExtra("lngStr") ?: "0.0"
+                  val baseLat = baseLatStr.toDouble()
+                  val baseLng = baseLngStr.toDouble()
                   
                   val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-                  // MEJORA: WakeLock sin límite de tiempo para que no se apague a los 10 mins
                   wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "InspectorPro::WakeLock")
-                  wakeLock?.acquire() 
+                  wakeLock?.acquire(10 * 60 * 1000L) // LIMITE DE 10 MINUTOS RESTAURADO PARA PROTECCIÓN
                   
                   val channelId = "inspector_v4_channel"
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -249,29 +252,32 @@ workflows:
                   
                   val notification = NotificationCompat.Builder(this, channelId)
                       .setContentTitle("INSPECTOR PRO 3 Activo")
-                      .setContentText("Inyectando 7 decimales exactos (Anti-Goma)...")
+                      .setContentText("Evasión sensorial y jitter activados...")
                       .setSmallIcon(android.R.drawable.ic_menu_mylocation)
                       .build()
                   
                   startForeground(1, notification)
                   
                   for (provider in providers) {
-                      try { locationManager?.removeTestProvider(provider) } catch (e: Exception) {}
+                      try { locationManager?.removeTestProvider(provider) } catch (e: Exception) { Log.e("MockLocationService", "Error removiendo", e) }
                   }
 
                   for (provider in providers) {
                       try {
                           locationManager?.addTestProvider(provider, false, false, false, false, true, true, true, 0, 5)
                           locationManager?.setTestProviderEnabled(provider, true)
-                      } catch (e: Exception) {}
+                      } catch (e: Exception) { Log.e("MockLocationService", "Error añadiendo", e) }
                   }
                   
-                  try { fusedLocationClient.setMockMode(true) } catch (e: Exception) {}
+                  try { fusedLocationClient.setMockMode(true) } catch (e: Exception) { Log.e("MockLocationService", "Error mockMode", e) }
 
                   mockRunnable = object : Runnable {
                       override fun run() {
-                          val exactLat = BigDecimal(latStr).setScale(7, RoundingMode.HALF_UP).toDouble()
-                          val exactLng = BigDecimal(lngStr).setScale(7, RoundingMode.HALF_UP).toDouble()
+                          // EVASIÓN: Micro-movimientos matemáticos (Ruido en el 6º/7º decimal)
+                          val jitterLat = (random.nextDouble() - 0.5) * 0.000010
+                          val jitterLng = (random.nextDouble() - 0.5) * 0.000010
+                          val exactLat = BigDecimal(baseLat + jitterLat).setScale(7, RoundingMode.HALF_UP).toDouble()
+                          val exactLng = BigDecimal(baseLng + jitterLng).setScale(7, RoundingMode.HALF_UP).toDouble()
 
                           val mockLocation = Location(LocationManager.GPS_PROVIDER)
                           
@@ -279,8 +285,10 @@ workflows:
                           mockLocation.latitude = exactLat
                           mockLocation.longitude = exactLng
                           mockLocation.altitude = 10.0
-                          mockLocation.speed = 0.0f
-                          mockLocation.bearing = 0.0f
+                          
+                          // EVASIÓN: Velocidad y rumbo orgánicos en lugar de 0.0
+                          mockLocation.speed = 0.1f + random.nextFloat() * 0.4f
+                          mockLocation.bearing = random.nextFloat() * 360f
                           
                           mockLocation.time = System.currentTimeMillis()
                           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
@@ -294,7 +302,7 @@ workflows:
                               mockLocation.bearingAccuracyDegrees = 1.0f
                           }
 
-                          mockLocation.extras = Bundle().apply { putBoolean("mockLocation", true) }
+                          // ELIMINADO EL BUNDLE DE EXTRAS PARA NO DEJAR RASTRO
 
                           for (p in providers) {
                               try {
@@ -304,21 +312,20 @@ workflows:
                                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
                                       loc.elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
                                   }
-                                  loc.speed = 0.0f
-                                  loc.bearing = 0.0f
                                   
                                   locationManager?.setTestProviderLocation(p, loc)
-                              } catch (e: Exception) {}
+                              } catch (e: Exception) { Log.e("MockLocationService", "Error inyectando provider", e) }
                           }
                           
                           try {
                               fusedLocationClient.setMockMode(true)
                               fusedLocationClient.setMockLocation(mockLocation)
                               fusedLocationClient.flushLocations()
-                          } catch (e: Exception) {}
+                          } catch (e: Exception) { Log.e("MockLocationService", "Error inyectando fused", e) }
 
-                          // MEJORA: 1000ms en lugar de 500ms (Ahorro batería y estabilidad)
-                          mockHandler.postDelayed(this, 1000)
+                          // EVASIÓN: Jitter temporal (Latido entre 800ms y 1200ms)
+                          val delay = 800L + random.nextInt(400).toLong()
+                          mockHandler.postDelayed(this, delay)
                       }
                   }
                   mockHandler.post(mockRunnable!!)
@@ -329,9 +336,9 @@ workflows:
               override fun onDestroy() {
                   mockRunnable?.let { mockHandler.removeCallbacks(it) }
                   for (provider in providers) {
-                      try { locationManager?.removeTestProvider(provider) } catch (e: Exception) {}
+                      try { locationManager?.removeTestProvider(provider) } catch (e: Exception) { Log.e("MockLocationService", "Error destroy remove", e) }
                   }
-                  try { fusedLocationClient.setMockMode(false) } catch (e: Exception) {}
+                  try { fusedLocationClient.setMockMode(false) } catch (e: Exception) { Log.e("MockLocationService", "Error destroy mockMode", e) }
                   if (wakeLock?.isHeld == true) { wakeLock?.release() }
                   super.onDestroy()
               }
