@@ -172,7 +172,6 @@ class GeocodingService {
     if (urlMatch != null) {
       String url = urlMatch.group(0)!;
       try {
-        // DISFRAZ DE GOOGLE CHROME PARA QUE MAPS NO NOS BLOQUEE LA URL
         final getRes = await http.get(
           Uri.parse(url),
           headers: {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
@@ -276,13 +275,13 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   Future<void> _checkSharedLinks() async {
     final String? sharedText = await _locationService.getSharedText();
     if (sharedText != null && sharedText.isNotEmpty) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Procesando enlace compartido...')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Procesando enlace...')));
       
       final LatLng? result = await _geocodingService.searchAddress(sharedText);
       if (result != null) {
         _updateMapCenterFromExtracted(result.latitude.toString(), result.longitude.toString());
       } else {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No se pudo extraer la coordenada de Google Maps.'), backgroundColor: Colors.red));
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No se pudo extraer la coordenada.'), backgroundColor: Colors.red));
       }
     }
   }
@@ -308,7 +307,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   Future<void> _goToRealLocation() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Activa el GPS físico del dispositivo.')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Activa el GPS físico.')));
       return;
     }
 
@@ -316,7 +315,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
       if (permission == LocationPermission.denied) {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Permiso de ubicación denegado.')));
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Permiso denegado.')));
         return;
       }
     }
@@ -327,7 +326,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
         _center = LatLng(double.parse(lastPos.latitude.toStringAsFixed(7)), double.parse(lastPos.longitude.toStringAsFixed(7)));
         _mapController.move(_center, 17.0);
       });
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ubicación rápida obtenida. Afinando...')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Afinando precisión GPS...')));
     } else {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Buscando satélites...')));
     }
@@ -450,7 +449,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     });
     
     _savePhotosToDisk();
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Evidencia Forense Asegurada.'), backgroundColor: Colors.green));
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Evidencia Asegurada.'), backgroundColor: Colors.green));
   }
 
   void _showPhotoGallery() {
@@ -618,6 +617,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     if (_isMocking) {
       await _locationService.stopMocking();
       setState(() => _isMocking = false);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Simulación Detenida. Caché de Google Maps limpiada.')));
     } else {
       var status = await Permission.locationWhenInUse.status;
       if (!status.isGranted) {
