@@ -127,25 +127,37 @@ class ValidationService {
 }
 
 /// ============================================================================
-/// MÓDULO 3: CEREBRO DE CONVERSIÓN Y EXTRACCIÓN DE DIRECCIONES
+/// MÓDULO 3: CEREBRO DE CONVERSIÓN Y EXTRACCIÓN (NUEVOS REGEX BLINDADOS)
 /// ============================================================================
 class CoordinateConverter {
   static LatLng? parseInput(String input) {
     String clean = input.trim().toUpperCase();
     if (clean.isEmpty) return null;
 
+    // 1. DECIMAL BLINDADO (Acepta puntos, comas y espacios intercalados)
     try {
-      if (clean.contains('.') || clean.contains(',')) {
-        String numClean = clean.replaceAll('º', '').replaceAll('°', '').replaceAll(' ', '');
-        List<String> parts = numClean.split(RegExp(r'[,|;]'));
-        if (parts.length >= 2) {
-          double lat = double.parse(parts[0]);
-          double lng = double.parse(parts[1]);
-          return LatLng(double.parse(lat.toStringAsFixed(7)), double.parse(lng.toStringAsFixed(7)));
-        }
+      final RegExp decimalRegExp = RegExp(r'(-?\d+\.\d+)[^\d-]+(-?\d+\.\d+)');
+      final match = decimalRegExp.firstMatch(clean.replaceAll(',', '.'));
+      if (match != null) {
+        return LatLng(double.parse(match.group(1)!), double.parse(match.group(2)!));
       }
     } catch (_) {}
 
+    // 2. PARSEADOR DMS (Grados, Minutos, Segundos Reales)
+    try {
+       final RegExp dmsRegExp = RegExp(r'''(\d+)[°\s]+(\d+)['\s]+([\d.]+)["\s]*([NS])\s*[,;]?\s*(\d+)[°\s]+(\d+)['\s]+([\d.]+)["\s]*([EWOW])''');
+       final match = dmsRegExp.firstMatch(clean);
+       if (match != null) {
+         double lat = double.parse(match.group(1)!) + double.parse(match.group(2)!)/60 + double.parse(match.group(3)!)/3600;
+         if (match.group(4) == 'S') lat = -lat; 
+         
+         double lng = double.parse(match.group(5)!) + double.parse(match.group(6)!)/60 + double.parse(match.group(7)!)/3600;
+         if (match.group(8) == 'W' || match.group(8) == 'O') lng = -lng; 
+         return LatLng(lat, lng);
+       }
+    } catch (_) {}
+
+    // 3. EXTRACCIÓN UTM
     try {
       List<String> parts = clean.split(RegExp(r'\s+'));
       if (parts.length >= 3) {
@@ -155,7 +167,7 @@ class CoordinateConverter {
         double easting = double.parse(parts[1]);
         double northing = double.parse(parts[2]);
         final latlon = UTM.fromUtm(easting: easting, northing: northing, zoneNumber: zoneNum, zoneLetter: zoneLetter);
-        return LatLng(double.parse(latlon.lat.toStringAsFixed(7)), double.parse(latlon.lon.toStringAsFixed(7)));
+        return LatLng(latlon.lat, latlon.lon);
       }
     } catch (_) {}
 
@@ -170,60 +182,49 @@ class GeocodingService {
 
     final urlMatch = RegExp(r'(https?://[^\s]+)').firstMatch(query);
     if (urlMatch != null) {
-      String finalUrl = urlMatch.group(0)!;
+      String url = urlMatch.group(0)!;
       try {
-        // PARCHE EU: Leer redirecciones manualmente para saltar el Muro de Cookies de Google
-        int redirects = 0;
-        while (redirects < 3) {
-          final request = http.Request('GET', Uri.parse(finalUrl))..followRedirects = false;
-          final response = await http.Client().send(request);
-          if (response.statusCode >= 300 && response.statusCode < 400) {
-            finalUrl = response.headers['location'] ?? finalUrl;
-            redirects++;
-          } else {
-            break;
-          }
-        }
+        // TIMEOUT y Extracción de Meta-Tags segura
+        final response = await http.get(
+          Uri.parse(url),
+          headers: {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+        ).timeout(const Duration(seconds: 5));
         
-        finalUrl = Uri.decodeFull(finalUrl); // Convertir %2C a comas
+        String finalUrl = Uri.decodeFull(response.request?.url.toString() ?? url);
 
+        // Nivel 1: URL
         final atMatch = RegExp(r'@(-?\d+\.\d+),(-?\d+\.\d+)').firstMatch(finalUrl);
-        if (atMatch != null) {
-          double lat = double.parse(atMatch.group(1)!);
-          double lng = double.parse(atMatch.group(2)!);
-          return LatLng(double.parse(lat.toStringAsFixed(7)), double.parse(lng.toStringAsFixed(7)));
-        }
-        
-        final dMatch = RegExp(r'!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)').firstMatch(finalUrl);
-        if (dMatch != null) {
-          double lat = double.parse(dMatch.group(1)!);
-          double lng = double.parse(dMatch.group(2)!);
-          return LatLng(double.parse(lat.toStringAsFixed(7)), double.parse(lng.toStringAsFixed(7)));
-        }
+        if (atMatch != null) return LatLng(double.parse(atMatch.group(1)!), double.parse(atMatch.group(2)!));
 
-        final qMatch = RegExp(r'q=(-?\d+\.\d+),(-?\d+\.\d+)').firstMatch(finalUrl);
-        if (qMatch != null) {
-          double lat = double.parse(qMatch.group(1)!);
-          double lng = double.parse(qMatch.group(2)!);
-          return LatLng(double.parse(lat.toStringAsFixed(7)), double.parse(lng.toStringAsFixed(7)));
-        }
+        final dMatch = RegExp(r'!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)').firstMatch(finalUrl);
+        if (dMatch != null) return LatLng(double.parse(dMatch.group(1)!), double.parse(dMatch.group(2)!));
+
+        // Nivel 2: Meta-Tags del HTML (Sin parsear toda la basura)
+        final metaMatch = RegExp(r'center=(-?\d+\.\d+)%2C(-?\d+\.\d+)').firstMatch(response.body);
+        if (metaMatch != null) return LatLng(double.parse(metaMatch.group(1)!), double.parse(metaMatch.group(2)!));
+        
+        final metaMatch2 = RegExp(r'center=(-?\d+\.\d+),(-?\d+\.\d+)').firstMatch(response.body);
+        if (metaMatch2 != null) return LatLng(double.parse(metaMatch2.group(1)!), double.parse(metaMatch2.group(2)!));
+
       } catch (e) {
-        debugPrint("Error resolviendo URL Maps: $e");
+        debugPrint("Timeout o Error resolviendo URL Maps: $e");
       }
     }
 
-    final Uri nominatimUrl = Uri.parse('https://nominatim.openstreetmap.org/search?q=${Uri.encodeComponent(query)}&format=json&limit=1');
+    // Nominatim con Timeout
     try {
-      final response = await http.get(nominatimUrl, headers: {'User-Agent': 'InspectorPro3'});
+      final Uri nominatimUrl = Uri.parse('https://nominatim.openstreetmap.org/search?q=${Uri.encodeComponent(query)}&format=json&limit=1');
+      final response = await http.get(nominatimUrl, headers: {'User-Agent': 'InspectorPro3'}).timeout(const Duration(seconds: 5));
+      
       if (response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body);
         if (data.isNotEmpty) {
-          final double lat = double.parse(data[0]['lat'].toString());
-          final double lon = double.parse(data[0]['lon'].toString());
-          return LatLng(double.parse(lat.toStringAsFixed(7)), double.parse(lon.toStringAsFixed(7)));
+          return LatLng(double.parse(data[0]['lat'].toString()), double.parse(data[0]['lon'].toString()));
         }
       }
-    } catch (e) {}
+    } catch (e) {
+      debugPrint("Timeout Nominatim");
+    }
     
     return null;
   }
@@ -288,7 +289,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       
       final LatLng? result = await _geocodingService.searchAddress(sharedText);
       if (result != null) {
-        _updateMapCenterFromExtracted(result.latitude.toString(), result.longitude.toString());
+        _updateMapCenterFromExtracted(result.latitude.toStringAsFixed(7), result.longitude.toStringAsFixed(7));
       } else {
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No se pudo extraer la coordenada.'), backgroundColor: Colors.red));
       }
@@ -558,11 +559,11 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                             TextField(controller: utmNorthCtrl, decoration: const InputDecoration(labelText: 'Northing (Y)'), keyboardType: const TextInputType.numberWithOptions(decimal: true)),
                           ],
                         ),
-                        const Center(child: Text("Utilice el formato Decimal o busque la Dirección directamente.", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey))),
+                        const Center(child: Text("Para DMS introduzca la coordenada en el campo de Dirección/Link.", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey))),
                         Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            const Text("Escribe una calle o pega un link de Maps:", style: TextStyle(fontSize: 12, color: Colors.grey)),
+                            const Text("Escribe una calle, link de Maps o formato DMS:", style: TextStyle(fontSize: 12, color: Colors.grey)),
                             const SizedBox(height: 10),
                             TextField(
                               controller: addressCtrl, 
@@ -602,7 +603,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 
                         if (parsed != null) {
                           setState(() {
-                            // BLINDAJE DECIMAL AL IMPORTAR
                             _center = LatLng(double.parse(parsed!.latitude.toStringAsFixed(7)), double.parse(parsed.longitude.toStringAsFixed(7)));
                             _mapController.move(_center, 17.0);
                           });
@@ -627,7 +627,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     if (_isMocking) {
       await _locationService.stopMocking();
       setState(() => _isMocking = false);
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Simulación Detenida. Caché de Google Maps limpiada.')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Simulación Detenida. GPS físico restaurado.')));
     } else {
       var status = await Permission.locationWhenInUse.status;
       if (!status.isGranted) {
@@ -720,8 +720,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
               initialCenter: _center,
               initialZoom: 17.0,
               onPositionChanged: (pos, hasGesture) {
-                // PARCHE DEL LÁDRON DE DECIMALES: 
-                // Solo se actualiza la coordenada visual si arrastras el mapa (hasGesture == true).
+                // BLINDAJE DECIMAL VITAL: Ignorar el centro del mapa a menos que el usuario lo mueva con el dedo.
                 if (pos.center != null && !_isMocking && hasGesture) {
                   setState(() => _center = pos.center!);
                 }
