@@ -249,7 +249,11 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _requestPermissions();
     _loadAndCleanPhotos();
-    _checkSharedLinks(); 
+    
+    // MEJORA: Esperamos a que el UI esté construido antes de leer los enlaces
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkSharedLinks(); 
+    });
   }
 
   @override
@@ -289,7 +293,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
           debugPrint("Error resolviendo URL: $e");
         }
       } else {
-        // Si mandan texto normal que no sea URL, usamos el servicio de Geocoding
         final LatLng? result = await _geocodingService.searchAddress(sharedText);
         if (result != null) {
           _updateMapCenterFromExtracted(result.latitude.toString(), result.longitude.toString());
@@ -305,7 +308,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       _center = LatLng(double.parse(lat.toStringAsFixed(7)), double.parse(lng.toStringAsFixed(7)));
       _mapController.move(_center, 17.0);
     });
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ubicación capturada con éxito.'), backgroundColor: Colors.green));
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ubicación capturada.'), backgroundColor: Colors.green));
   }
 
   Future<void> _requestPermissions() async {
@@ -316,11 +319,11 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     ].request();
   }
 
-  // BUG CORREGIDO: GPS Real blindado con temporizador y fallback
+  // MEJORA: GPS Estrategia Óptima (Instantánea + 5s bestForNavigation)
   Future<void> _goToRealLocation() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Activa el GPS físico del dispositivo.')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Activa el GPS físico del dispositivo.')));
       return;
     }
 
@@ -328,34 +331,38 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
       if (permission == LocationPermission.denied) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Permiso de ubicación denegado.')));
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Permiso de ubicación denegado.')));
         return;
       }
     }
 
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Buscando señal real...')));
-    
+    // 1. Intento Inmediato
+    Position? lastPos = await Geolocator.getLastKnownPosition();
+    if (lastPos != null) {
+      setState(() {
+        _center = LatLng(double.parse(lastPos.latitude.toStringAsFixed(7)), double.parse(lastPos.longitude.toStringAsFixed(7)));
+        _mapController.move(_center, 17.0);
+      });
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ubicación rápida obtenida. Afinando precisión...')));
+    } else {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Buscando satélites...')));
+    }
+
+    // 2. Búsqueda Fina (Mejor para navegación, 5s timeout)
     try {
       Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-        timeLimit: const Duration(seconds: 5), // Límite de 5 segundos
+        desiredAccuracy: LocationAccuracy.bestForNavigation,
+        timeLimit: const Duration(seconds: 5), 
       );
       
       setState(() {
         _center = LatLng(double.parse(position.latitude.toStringAsFixed(7)), double.parse(position.longitude.toStringAsFixed(7)));
         _mapController.move(_center, 17.0);
       });
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Precisión GPS máxima obtenida.')));
     } catch (e) {
-      // Fallback: Si no consigue señal nueva en 5s, usa la última conocida
-      Position? lastPos = await Geolocator.getLastKnownPosition();
-      if (lastPos != null) {
-        setState(() {
-          _center = LatLng(double.parse(lastPos.latitude.toStringAsFixed(7)), double.parse(lastPos.longitude.toStringAsFixed(7)));
-          _mapController.move(_center, 17.0);
-        });
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Se usó la última ubicación conocida.')));
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No se pudo encontrar señal GPS.')));
+      if (lastPos == null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Señal débil en interiores.')));
       }
     }
   }
@@ -454,7 +461,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Evidencia Guardada.'), backgroundColor: Colors.green));
   }
 
-  // BUG CORREGIDO: Mover al mapa al tocar una foto ahora tiene un micro-retraso
   void _showPhotoGallery() {
     showModalBottomSheet(
       context: context,
@@ -489,9 +495,9 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                 },
               ),
               onTap: () {
-                Navigator.pop(context); // Cierra el cajón primero
-                // El retraso de 300ms permite que el mapa reciba la orden correctamente
-                Future.delayed(const Duration(milliseconds: 300), () {
+                Navigator.pop(context); 
+                // MEJORA: Aumentado el micro-retraso a 400ms para asegurar renderizado en tablet
+                Future.delayed(const Duration(milliseconds: 400), () {
                   final newPos = LatLng(double.parse(f['lat'].toString()), double.parse(f['lng'].toString()));
                   _mapController.move(newPos, 17.0);
                   setState(() => _center = newPos);
@@ -504,7 +510,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     );
   }
 
-  // --- DIÁLOGO PLANTILLA DE COORDENADAS CON BUSCADOR AÑADIDO ---
   void _showCoordinateInputDialog() {
     final TextEditingController decLatCtrl = TextEditingController();
     final TextEditingController decLngCtrl = TextEditingController();
@@ -519,7 +524,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       context: context,
       builder: (context) {
         return DefaultTabController(
-          length: 4, // 4 pestañas ahora
+          length: 4, 
           child: Dialog(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             child: Container(
@@ -538,7 +543,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                   Expanded(
                     child: TabBarView(
                       children: [
-                        // PESTAÑA DECIMAL
                         Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
@@ -547,7 +551,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                             TextField(controller: decLngCtrl, decoration: const InputDecoration(labelText: 'Longitud (Ej: -5.167703)'), keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true)),
                           ],
                         ),
-                        // PESTAÑA UTM
                         Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
@@ -556,9 +559,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                             TextField(controller: utmNorthCtrl, decoration: const InputDecoration(labelText: 'Northing (Y)'), keyboardType: const TextInputType.numberWithOptions(decimal: true)),
                           ],
                         ),
-                        // PESTAÑA DMS 
                         const Center(child: Text("Utilice el formato Decimal o busque la Dirección directamente.", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey))),
-                        // PESTAÑA DIRECCIÓN (EL BUSCADOR QUE QUERÍAS)
                         Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
@@ -581,18 +582,15 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                       onPressed: () async {
                         LatLng? parsed;
                         
-                        // 1. Comprobar si hay búsqueda por dirección o link
                         if (addressCtrl.text.isNotEmpty) {
                           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Buscando...')));
                           parsed = await _geocodingService.searchAddress(addressCtrl.text);
                         } 
-                        // 2. Comprobar Decimales
                         else if (decLatCtrl.text.isNotEmpty && decLngCtrl.text.isNotEmpty) {
                           try {
                             parsed = LatLng(double.parse(decLatCtrl.text.replaceAll(',', '.')), double.parse(decLngCtrl.text.replaceAll(',', '.')));
                           } catch (_) {}
                         } 
-                        // 3. Comprobar UTM
                         else if (utmZoneCtrl.text.isNotEmpty && utmEastCtrl.text.isNotEmpty && utmNorthCtrl.text.isNotEmpty) {
                           try {
                             String zone = utmZoneCtrl.text.trim().toUpperCase();
@@ -608,9 +606,9 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                             _center = LatLng(double.parse(parsed!.latitude.toStringAsFixed(7)), double.parse(parsed.longitude.toStringAsFixed(7)));
                             _mapController.move(_center, 17.0);
                           });
-                          Navigator.pop(context);
+                          if (mounted) Navigator.pop(context);
                         } else {
-                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No se pudo encontrar la ubicación.')));
+                          if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No se pudo encontrar la ubicación.')));
                         }
                       },
                       child: const Text("ENVIAR AL MAPA"),
@@ -625,7 +623,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     );
   }
 
-  // --- MOTOR DE INYECCIÓN Y CHEQUEOS ---
   Future<void> _toggleMock() async {
     if (_isMocking) {
       await _locationService.stopMocking();
@@ -634,7 +631,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       var status = await Permission.locationWhenInUse.status;
       if (!status.isGranted) {
         await _requestPermissions();
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Debes otorgar permisos de ubicación primero.')));
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Debes otorgar permisos de ubicación primero.')));
         return;
       }
       
@@ -660,7 +657,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
           _lastInjectedTime = DateTime.now();
         });
       } else {
-        // BUG CORREGIDO: Aviso explícito si no eres app de simulación en desarrollador
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: Configura la app como "Aplicación de ubicación simulada" en Opciones de Desarrollador'), backgroundColor: Colors.red, duration: const Duration(seconds: 4)));
       }
     }
@@ -717,7 +713,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     return Scaffold(
       body: Stack(
         children: [
-          // 1. EL MAPA (FONDO COMPLETO)
           FlutterMap(
             mapController: _mapController,
             options: MapOptions(
@@ -744,7 +739,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
           
           Center(child: Icon(_isMocking ? Icons.gps_fixed : Icons.add_circle_outline, color: _isMocking ? Colors.green : Colors.red, size: 44)),
 
-          // 2. BARRA DE HERRAMIENTAS SUPERIOR FLOTANTE
           SafeArea(
             child: Align(
               alignment: Alignment.topCenter,
@@ -772,7 +766,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
             ),
           ),
 
-          // 3. CRUCETA LATERAL (D-PAD)
           if (!_isMocking)
             Positioned(
               right: 16,
@@ -795,7 +788,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
               ),
             ),
 
-          // 4. PANEL INFERIOR (COORDENADAS Y GATILLO)
           SafeArea(
             child: Align(
               alignment: Alignment.bottomCenter,
