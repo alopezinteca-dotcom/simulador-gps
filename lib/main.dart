@@ -190,7 +190,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     );
   }
 
-  // ✅ NULL-SAFETY CORRECTO
+  // ✅ NULL-SAFETY 100% CORREGIDO
   Future<void> _goReal() async {
     bool enabled = await Geolocator.isLocationServiceEnabled();
     if (!enabled) {
